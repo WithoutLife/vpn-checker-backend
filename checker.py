@@ -28,14 +28,14 @@ if os.path.exists(FOLDER_EURO):
 os.makedirs(FOLDER_RU, exist_ok=True)
 os.makedirs(FOLDER_EURO, exist_ok=True)
 
-TIMEOUT = 5
+TIMEOUT = 3
 socket.setdefaulttimeout(TIMEOUT)
-THREADS = 40
+THREADS = 60
 
 CACHE_HOURS = 6
 CHUNK_LIMIT = 1000
 EURO_CHUNK_LIMIT = 500
-MAX_KEYS_TO_CHECK = 100000  # УВЕЛИЧЕНО
+MAX_KEYS_TO_CHECK = 3000  # уменьшено
 
 MAX_PING_MS = 10000
 FAST_LIMIT = 3000
