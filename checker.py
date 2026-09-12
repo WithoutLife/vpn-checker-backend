@@ -28,14 +28,14 @@ if os.path.exists(FOLDER_EURO):
 os.makedirs(FOLDER_RU, exist_ok=True)
 os.makedirs(FOLDER_EURO, exist_ok=True)
 
-TIMEOUT = 3
+TIMEOUT = 10
 socket.setdefaulttimeout(TIMEOUT)
-THREADS = 60
+THREADS = 40
 
 CACHE_HOURS = 6
 CHUNK_LIMIT = 1000
 EURO_CHUNK_LIMIT = 500
-MAX_KEYS_TO_CHECK = 3000  # уменьшено
+MAX_KEYS_TO_CHECK = 40000  # уменьшено
 
 MAX_PING_MS = 10000
 FAST_LIMIT = 3000
@@ -404,7 +404,7 @@ def fetch_keys(urls, tag):
         try:
             if "github.com" in url and "/blob/" in url:
                 url = url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
-            r = requests.get(url, timeout=10)
+            r = requests.get(url, timeout=5)
             if r.status_code != 200:
                 continue
             content = r.text.strip()
