@@ -346,6 +346,7 @@ def _geo_api_wait_slot() -> bool:
     return True
 
 def detect_exit_country_via_http(proxy_host: str) -> str:
+    """Возвращает countryCode. Параллельно кладёт в кэш as/org для проверки на РФ."""
     global _ip_api_disabled
     ip = resolve_host(proxy_host)
     if not ip:
@@ -354,21 +355,37 @@ def detect_exit_country_via_http(proxy_host: str) -> str:
         cached = _disk_ip_cache.get(ip)
     if cached:
         _inc_geo_stat("cache")
-        return cached["country"]
+        return cached.get("country", "UNKNOWN")
     if _ip_api_disabled:
         return "UNKNOWN"
     if not _geo_api_wait_slot():
         return "UNKNOWN"
     try:
-        r = requests.get(f"http://ip-api.com/json/{ip}?fields=countryCode", timeout=4)
+        # Берём больше полей, чтобы ловить русские ASN/организации
+        r = requests.get(
+            f"http://ip-api.com/json/{ip}?fields=status,countryCode,as,org,isp,query",
+            timeout=4
+        )
         if r.status_code == 429:
             _ip_api_disabled = True
             print("⚠️  ip-api вернул 429 (rate limit) — geo-API отключён до конца запуска")
             return "UNKNOWN"
         if r.status_code == 200:
-            code = r.json().get("countryCode", "UNKNOWN") or "UNKNOWN"
+            data = r.json()
+            if data.get("status") != "success":
+                return "UNKNOWN"
+            code = data.get("countryCode") or "UNKNOWN"
+            asn = (data.get("as") or "").lower()
+            org = (data.get("org") or "").lower()
+            isp = (data.get("isp") or "").lower()
             with _ip_cache_lock:
-                _disk_ip_cache[ip] = {"country": code, "time": time.time()}
+                _disk_ip_cache[ip] = {
+                    "country": code,
+                    "as": asn,
+                    "org": org,
+                    "isp": isp,
+                    "time": time.time()
+                }
             _inc_geo_stat("api")
             return code
     except Exception:
@@ -408,19 +425,49 @@ def _has_many_ru_markers(host: str, key_str: str) -> bool:
     return False
 
 def is_russian_exit(key_str: str, host: str, country: str) -> bool:
+    """Определяем российский выход максимально жёстко (ASN + org + маркеры)."""
     if country == "RU":
         return True
+
     host_lower = host.lower()
     key_lower = key_str.lower()
+
     if host_lower.endswith(".ru"):
         return True
+
     for marker in RU_MARKERS_STRICT:
         if marker.lower() in host_lower:
             return True
-    # дополнительные русские маркеры
-    extra = [".ru", "moscow", "msk", "spb", "yandex", "vk.", "mail.ru", "sber", "россия", "москва"]
+
+    extra = [".ru", "moscow", "msk", "spb", "yandex", "vk.", "mail.ru", "sber", "россия", "москва", "selectel", "timeweb", "reg.ru"]
     if any(h in host_lower or h in key_lower for h in extra):
         return True
+
+    # Проверяем кэш ASN/организации
+    ip = resolve_host(host)
+    if ip:
+        with _ip_cache_lock:
+            cached = _disk_ip_cache.get(ip)
+        if cached:
+            asn = (cached.get("as") or "").lower()
+            org = (cached.get("org") or "").lower()
+            isp = (cached.get("isp") or "").lower()
+            text = f"{asn} {org} {isp}"
+
+            # Характерные российские куски
+            ru_asn_org = [
+                "yandex", "vk.com", "vkontakte", "mail.ru", "rambler", "sber",
+                "rostelecom", "rt.ru", "mts", "megafon", "beeline", "tele2",
+                "selectel", "timeweb", "reg.ru", "masterhost", "firstvds",
+                "ihc.ru", "majordomo", "spaceweb", "adminvps", "justhost",
+                "datahouse", "dataline", "filanco", "netrack", "servercore",
+                "croc", "softline", "kiaе", "rtcomm", "transtelecom",
+                "er-telecom", "dom.ru", "akado", "netbynet", "2com",
+                "moscow", "russia", "russian", "россия", "москва"
+            ]
+            if any(x in text for x in ru_asn_org):
+                return True
+
     return False
 
 def is_garbage_text(key_str: str) -> bool:
