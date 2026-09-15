@@ -37,8 +37,8 @@ CHUNK_LIMIT = 1000
 EURO_CHUNK_LIMIT = 500
 MAX_KEYS_TO_CHECK = 40000  # уменьшено
 
-MAX_PING_MS = 10000
-FAST_LIMIT = 3000
+MAX_PING_MS = 2800
+FAST_LIMIT = 1800
 MAX_HISTORY_AGE = 2 * 24 * 3600
 
 # Дисковый кэш IP → страна
@@ -243,6 +243,36 @@ def fix_universal(key: str) -> str:
     except Exception:
         return key
 
+def is_valid_key(key: str) -> bool:
+    """Жёсткая валидация ключа — отсекает кривые Reality и явный мусор"""
+    key = key.strip()
+    if not key.startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria2://")):
+        return False
+    if len(key) < 45 or len(key) > 2500:
+        return False
+    if "127.0.0.1" in key or "localhost" in key or "0.0.0.0" in key:
+        return False
+
+    lower = key.lower()
+    # Reality должен иметь обязательные параметры
+    if key.startswith("vless://") and "security=reality" in lower:
+        if "pbk=" not in lower or "sid=" not in lower or "fp=" not in lower:
+            return False
+        # пустые значения
+        if "sid=&" in key or "sid=#" in key or "pbk=&" in key or "pbk=#" in key:
+            return False
+        # слишком короткий public key (обычно 43-44 символа base64)
+        m = re.search(r"pbk=([^&]+)", key)
+        if m and len(m.group(1)) < 20:
+            return False
+
+    bad = ["CN", "IR", "KR", "BR", "IN", "RELAY", "POOL", "🇨🇳", "🇮🇷", "🇰🇷", ".ir/", ".cn/"]
+    upper = key.upper()
+    for m in bad:
+        if m in upper:
+            return False
+    return True
+
 # ==================== GEO-API + КЭШИ ====================
 
 _disk_ip_cache: dict = {}
@@ -381,11 +411,16 @@ def is_russian_exit(key_str: str, host: str, country: str) -> bool:
     if country == "RU":
         return True
     host_lower = host.lower()
+    key_lower = key_str.lower()
     if host_lower.endswith(".ru"):
         return True
     for marker in RU_MARKERS_STRICT:
         if marker.lower() in host_lower:
             return True
+    # дополнительные русские маркеры
+    extra = [".ru", "moscow", "msk", "spb", "yandex", "vk.", "mail.ru", "sber", "россия", "москва"]
+    if any(h in host_lower or h in key_lower for h in extra):
+        return True
     return False
 
 def is_garbage_text(key_str: str) -> bool:
@@ -421,7 +456,8 @@ def fetch_keys(urls, tag):
                     continue
                 # ДОБАВЛЕНЫ ПРОТОКОЛЫ hy2:// и hysteria2://
                 if l.startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria2://")):
-                    # ВРЕМЕННО ОТКЛЮЧАЕМ ФИЛЬТР ДЛЯ MY (для отладки)
+                    if not is_valid_key(l):
+                        continue
                     # if tag == "MY" and is_garbage_text(l):
                     #     continue
                     out.append((l, tag))
@@ -820,8 +856,9 @@ if __name__ == "__main__":
     print(f"  RU: {len(res_ru_clean)} ключей")
     print(f"  EURO: {len(res_euro_clean)} ключей")
 
-    res_ru_fast = res_ru_clean[:FAST_LIMIT]
-    res_euro_fast = res_euro_clean[:FAST_LIMIT]
+    # Жёстче режем FAST: только реально быстрые
+    res_ru_fast = [k for k in res_ru_clean if extract_ping(k) is not None and extract_ping(k) <= 1300][:FAST_LIMIT]
+    res_euro_fast = [k for k in res_euro_clean if extract_ping(k) is not None and extract_ping(k) <= 1500][:FAST_LIMIT]
 
     print(f"\n🚀 FAST слои (топ {FAST_LIMIT}):")
     print(f"  RU FAST: {len(res_ru_fast)}")
