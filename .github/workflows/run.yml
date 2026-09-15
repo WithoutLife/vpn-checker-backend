@@ -2,21 +2,32 @@ name: Run VPN Checker
 
 on:
   schedule:
-    - cron: '0 */3 * * *' # Запуск каждые 3 часа
-  workflow_dispatch: # Кнопка для запуска вручную
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: vpn-checker
+  cancel-in-progress: true 
+
+permissions:
+  contents: write
 
 jobs:
   run-checker:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+        cache: 'pip'
 
     - name: Install dependencies
       run: |
@@ -28,7 +39,10 @@ jobs:
 
     - name: Commit and Push changes
       run: |
-        git config --local user.email "github-actions[bot]@://github.com"
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         git add checked/
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Автообновление ключей" && git push)
+        git diff --quiet && git diff --staged --quiet || (
+          git commit -m "Автообновление ключей $(date -u +%Y-%m-%dT%H:%MZ)" &&
+          git push
+        )
