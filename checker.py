@@ -425,7 +425,6 @@ def _has_many_ru_markers(host: str, key_str: str) -> bool:
     return False
 
 def is_russian_exit(key_str: str, host: str, country: str, org: str = None, isp: str = None) -> bool:
-    """Определяем российский выход максимально жёстко (ASN + org + маркеры)."""
     if country == "RU":
         return True
 
@@ -454,7 +453,6 @@ def is_russian_exit(key_str: str, host: str, country: str, org: str = None, isp:
             isp = (cached.get("isp") or "").lower()
             text = f"{asn} {org} {isp}"
 
-            # Характерные российские куски
             ru_asn_org = [
                 "yandex", "vk.com", "vkontakte", "mail.ru", "rambler", "sber",
                 "rostelecom", "rt.ru", "mts", "megafon", "beeline", "tele2",
@@ -467,23 +465,6 @@ def is_russian_exit(key_str: str, host: str, country: str, org: str = None, isp:
             ]
             if any(x in text for x in ru_asn_org):
                 return True
-
-    # Новая функция от тебя
-    if country == "RU":
-        return True
-    host_lower = host.lower()
-    if any(h in host_lower for h in [".ru", "msk", "spb", "yandex", "vk.", "mail.ru", "sber"]):
-        return True
-    if org and isp:
-        org_lower = org.lower()
-        isp_lower = isp.lower()
-        if any(x in org_lower for x in ["yandex", "vk", "rostel", "selectel", "data line", "timeweb", "mts", "megafon", "rostelecom"]):
-            return True
-        if any(x in isp_lower for x in ["yandex", "vk", "rostel", "selectel", "data line", "timeweb", "mts", "megafon"]):
-            return True
-    if "hysteria2" in key_str.lower() or "hy2" in key_str.lower():
-        if "msk.frkn.org" in key_str.lower() or "frkn" in key_str.lower():
-            return True
 
     return False
 
