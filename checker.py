@@ -55,7 +55,7 @@ EURO_FILES = ["my_euro_part1.txt", "my_euro_part2.txt", "my_euro_part3.txt"]
 HISTORY_FILE = os.path.join(BASE_DIR, "history.json")
 MY_CHANNEL = "@vlesstrojan"
 
-# ==================== ОБНОВЛЁННЫЙ СПИСОК URLS_RU ====================
+# ==================== ОБНОВЁННЫЙ СПИСОК URLS_RU ====================
 URLS_RU = [
     # старые источники (сохраняем все, что были)
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Base64/BLACK_SS+All_RUS_base64.txt",
@@ -424,7 +424,7 @@ def _has_many_ru_markers(host: str, key_str: str) -> bool:
                 return True
     return False
 
-def is_russian_exit(key_str: str, host: str, country: str) -> bool:
+def is_russian_exit(key_str: str, host: str, country: str, org: str = None, isp: str = None) -> bool:
     """Определяем российский выход максимально жёстко (ASN + org + маркеры)."""
     if country == "RU":
         return True
@@ -467,6 +467,23 @@ def is_russian_exit(key_str: str, host: str, country: str) -> bool:
             ]
             if any(x in text for x in ru_asn_org):
                 return True
+
+    # Новая функция от тебя
+    if country == "RU":
+        return True
+    host_lower = host.lower()
+    if any(h in host_lower for h in [".ru", "msk", "spb", "yandex", "vk.", "mail.ru", "sber"]):
+        return True
+    if org and isp:
+        org_lower = org.lower()
+        isp_lower = isp.lower()
+        if any(x in org_lower for x in ["yandex", "vk", "rostel", "selectel", "data line", "timeweb", "mts", "megafon", "rostelecom"]):
+            return True
+        if any(x in isp_lower for x in ["yandex", "vk", "rostel", "selectel", "data line", "timeweb", "mts", "megafon"]):
+            return True
+    if "hysteria2" in key_str.lower() or "hy2" in key_str.lower():
+        if "msk.frkn.org" in key_str.lower() or "frkn" in key_str.lower():
+            return True
 
     return False
 
@@ -597,7 +614,8 @@ def check_single_key(data):
 
     latency = int((time.time() - start) * 1000)
     country_exit = detect_exit_country_via_http(host)
-
+    org = None
+    isp = None
     if country_exit == "UNKNOWN":
         country_exit = get_country_fast(host, key)
         if country_exit == "UNKNOWN":
@@ -605,7 +623,16 @@ def check_single_key(data):
         else:
             _inc_geo_stat("fast")
 
-    return latency, tag, country_exit, host, key, None
+    # Достаём org/isp из кэша для новой функции
+    ip = resolve_host(host)
+    if ip:
+        with _ip_cache_lock:
+            cached = _disk_ip_cache.get(ip)
+        if cached:
+            org = cached.get("org", None)
+            isp = cached.get("isp", None)
+
+    return latency, tag, country_exit, host, key, None, org, isp
 
 def make_final_key(k_id, latency, country):
     title_ru = country_to_title_ru(country)
@@ -726,7 +753,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
         subs_lines.append("=== 🇷🇺 RUSSIA (ALL) ===")
         for fname in ru_all_nonempty:
             file_path = os.path.join(FOLDER_RU, fname)
-            mtime = int(os.path.getmtime(file_path)) if os.path.exists(file_path) else ""
+            mtime = int(os.getmtime(file_path)) if os.path.exists(file_path) else ""
             subs_lines.append(f"{BASE_RAW}/checked/RU_Best/{fname}?ts={mtime}")
         subs_lines.append("")
 
@@ -736,7 +763,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
         subs_lines.append("=== 🇪🇺 EUROPE (FAST) ===")
         for filename in euro_fast_nonempty:
             file_path = os.path.join(FOLDER_EURO, filename)
-            mtime = int(os.path.getmtime(file_path)) if os.path.exists(file_path) else ""
+            mtime = int(os.getmtime(file_path)) if os.path.exists(file_path) else ""
             subs_lines.append(f"{BASE_RAW}/checked/My_Euro/{filename}?ts={mtime}")
         subs_lines.append("")
 
@@ -746,7 +773,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
         subs_lines.append("=== 🇪🇺 EUROPE (ALL) ===")
         for fname in euro_all_nonempty:
             file_path = os.path.join(FOLDER_EURO, fname)
-            mtime = int(os.path.getmtime(file_path)) if os.path.exists(file_path) else ""
+            mtime = int(os.getmtime(file_path)) if os.path.exists(file_path) else ""
             subs_lines.append(f"{BASE_RAW}/checked/My_Euro/{fname}?ts={mtime}")
         subs_lines.append("")
 
@@ -754,7 +781,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
     ru_white_path = os.path.join(FOLDER_RU, "ru_white_all_WHITE.txt")
     if os.path.exists(ru_white_path) and os.path.getsize(ru_white_path) > 0:
         subs_lines.append("=== ✅ WHITE RUSSIA (ALL) ===")
-        mtime = int(os.path.getmtime(ru_white_path))
+        mtime = int(os.getmtime(ru_white_path))
         subs_lines.append(f"{BASE_RAW}/checked/RU_Best/ru_white_all_WHITE.txt?ts={mtime}")
         subs_lines.append("")
 
@@ -762,7 +789,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
     euro_white_path = os.path.join(FOLDER_EURO, "my_euro_all_WHITE.txt")
     if os.path.exists(euro_white_path) and os.path.getsize(euro_white_path) > 0:
         subs_lines.append("=== ✅ WHITE EUROPE (ALL) ===")
-        mtime = int(os.path.getmtime(euro_white_path))
+        mtime = int(os.getmtime(euro_white_path))
         subs_lines.append(f"{BASE_RAW}/checked/My_Euro/my_euro_all_WHITE.txt?ts={mtime}")
         subs_lines.append("")
 
@@ -770,7 +797,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
     ru_black_path = os.path.join(FOLDER_RU, "ru_white_all_BLACK.txt")
     if os.path.exists(ru_black_path) and os.path.getsize(ru_black_path) > 0:
         subs_lines.append("=== ⚠️ BLACK RUSSIA (ALL) ===")
-        mtime = int(os.path.getmtime(ru_black_path))
+        mtime = int(os.getmtime(ru_black_path))
         subs_lines.append(f"{BASE_RAW}/checked/RU_Best/ru_white_all_BLACK.txt?ts={mtime}")
         subs_lines.append("")
 
@@ -778,7 +805,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
     euro_black_path = os.path.join(FOLDER_EURO, "my_euro_all_BLACK.txt")
     if os.path.exists(euro_black_path) and os.path.getsize(euro_black_path) > 0:
         subs_lines.append("=== ⚠️ BLACK EUROPE (ALL) ===")
-        mtime = int(os.path.getmtime(euro_black_path))
+        mtime = int(os.getmtime(euro_black_path))
         subs_lines.append(f"{BASE_RAW}/checked/My_Euro/my_euro_all_BLACK.txt?ts={mtime}")
 
     subs_path = os.path.join(BASE_DIR, "subscriptions_list.txt")
@@ -852,7 +879,7 @@ if __name__ == "__main__":
             for future in as_completed(future_map):
                 key, tag = future_map[future]
                 try:
-                    latency, _, country, host, original_key, err_type = future.result()
+                    latency, _, country, host, original_key, err_type, org, isp = future.result()
                 except Exception:
                     if tag == "RU":
                         dead_ru.append(key)
@@ -877,7 +904,7 @@ if __name__ == "__main__":
                 if tag == "RU":
                     res_ru.append(final)
                 elif tag == "MY":
-                    if is_russian_exit(original_key, host, country):
+                    if is_russian_exit(original_key, host, country, org, isp):
                         euro_filtered_ru += 1
                         dead_euro.append(original_key)
                     else:
