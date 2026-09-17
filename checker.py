@@ -37,8 +37,8 @@ CHUNK_LIMIT = 1000
 EURO_CHUNK_LIMIT = 500
 MAX_KEYS_TO_CHECK = 40000  # уменьшено
 
-MAX_PING_MS = 2800
-FAST_LIMIT = 1800
+MAX_PING_MS = 10000
+FAST_LIMIT = 3000
 MAX_HISTORY_AGE = 2 * 24 * 3600
 
 # Дисковый кэш IP → страна
@@ -55,7 +55,7 @@ EURO_FILES = ["my_euro_part1.txt", "my_euro_part2.txt", "my_euro_part3.txt"]
 HISTORY_FILE = os.path.join(BASE_DIR, "history.json")
 MY_CHANNEL = "@vlesstrojan"
 
-# ==================== ОБНОВЁННЫЙ СПИСОК URLS_RU ====================
+# ==================== ОБНОВЛЁННЫЙ СПИСОК URLS_RU ====================
 URLS_RU = [
     # старые источники (сохраняем все, что были)
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Base64/BLACK_SS+All_RUS_base64.txt",
@@ -243,36 +243,6 @@ def fix_universal(key: str) -> str:
     except Exception:
         return key
 
-def is_valid_key(key: str) -> bool:
-    """Жёсткая валидация ключа — отсекает кривые Reality и явный мусор"""
-    key = key.strip()
-    if not key.startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria2://")):
-        return False
-    if len(key) < 45 or len(key) > 2500:
-        return False
-    if "127.0.0.1" in key or "localhost" in key or "0.0.0.0" in key:
-        return False
-
-    lower = key.lower()
-    # Reality должен иметь обязательные параметры
-    if key.startswith("vless://") and "security=reality" in lower:
-        if "pbk=" not in lower or "sid=" not in lower or "fp=" not in lower:
-            return False
-        # пустые значения
-        if "sid=&" in key or "sid=#" in key or "pbk=&" in key or "pbk=#" in key:
-            return False
-        # слишком короткий public key (обычно 43-44 символа base64)
-        m = re.search(r"pbk=([^&]+)", key)
-        if m and len(m.group(1)) < 20:
-            return False
-
-    bad = ["CN", "IR", "KR", "BR", "IN", "RELAY", "POOL", "🇨🇳", "🇮🇷", "🇰🇷", ".ir/", ".cn/"]
-    upper = key.upper()
-    for m in bad:
-        if m in upper:
-            return False
-    return True
-
 # ==================== GEO-API + КЭШИ ====================
 
 _disk_ip_cache: dict = {}
@@ -346,7 +316,6 @@ def _geo_api_wait_slot() -> bool:
     return True
 
 def detect_exit_country_via_http(proxy_host: str) -> str:
-    """Возвращает countryCode. Параллельно кладёт в кэш as/org для проверки на РФ."""
     global _ip_api_disabled
     ip = resolve_host(proxy_host)
     if not ip:
@@ -355,37 +324,21 @@ def detect_exit_country_via_http(proxy_host: str) -> str:
         cached = _disk_ip_cache.get(ip)
     if cached:
         _inc_geo_stat("cache")
-        return cached.get("country", "UNKNOWN")
+        return cached["country"]
     if _ip_api_disabled:
         return "UNKNOWN"
     if not _geo_api_wait_slot():
         return "UNKNOWN"
     try:
-        # Берём больше полей, чтобы ловить русские ASN/организации
-        r = requests.get(
-            f"http://ip-api.com/json/{ip}?fields=status,countryCode,as,org,isp,query",
-            timeout=4
-        )
+        r = requests.get(f"http://ip-api.com/json/{ip}?fields=countryCode", timeout=4)
         if r.status_code == 429:
             _ip_api_disabled = True
             print("⚠️  ip-api вернул 429 (rate limit) — geo-API отключён до конца запуска")
             return "UNKNOWN"
         if r.status_code == 200:
-            data = r.json()
-            if data.get("status") != "success":
-                return "UNKNOWN"
-            code = data.get("countryCode") or "UNKNOWN"
-            asn = (data.get("as") or "").lower()
-            org = (data.get("org") or "").lower()
-            isp = (data.get("isp") or "").lower()
+            code = r.json().get("countryCode", "UNKNOWN") or "UNKNOWN"
             with _ip_cache_lock:
-                _disk_ip_cache[ip] = {
-                    "country": code,
-                    "as": asn,
-                    "org": org,
-                    "isp": isp,
-                    "time": time.time()
-                }
+                _disk_ip_cache[ip] = {"country": code, "time": time.time()}
             _inc_geo_stat("api")
             return code
     except Exception:
@@ -424,7 +377,7 @@ def _has_many_ru_markers(host: str, key_str: str) -> bool:
                 return True
     return False
 
-def is_russian_exit(key_str: str, host: str, country: str, org: str = None, isp: str = None) -> bool:
+def is_russian_exit(key_str: str, host: str, country: str) -> bool:
     if country == "RU":
         return True
 
@@ -442,31 +395,8 @@ def is_russian_exit(key_str: str, host: str, country: str, org: str = None, isp:
     if any(h in host_lower or h in key_lower for h in extra):
         return True
 
-    # Проверяем кэш ASN/организации
-    ip = resolve_host(host)
-    if ip:
-        with _ip_cache_lock:
-            cached = _disk_ip_cache.get(ip)
-        if cached:
-            asn = (cached.get("as") or "").lower()
-            org = (cached.get("org") or "").lower()
-            isp = (cached.get("isp") or "").lower()
-            text = f"{asn} {org} {isp}"
-
-            ru_asn_org = [
-                "yandex", "vk.com", "vkontakte", "mail.ru", "rambler", "sber",
-                "rostelecom", "rt.ru", "mts", "megafon", "beeline", "tele2",
-                "selectel", "timeweb", "reg.ru", "masterhost", "firstvds",
-                "ihc.ru", "majordomo", "spaceweb", "adminvps", "justhost",
-                "datahouse", "dataline", "filanco", "netrack", "servercore",
-                "croc", "softline", "kiaе", "rtcomm", "transtelecom",
-                "er-telecom", "dom.ru", "akado", "netbynet", "2com",
-                "moscow", "russia", "russian", "россия", "москва"
-            ]
-            if any(x in text for x in ru_asn_org):
-                return True
-
     return False
+
 
 def is_garbage_text(key_str: str) -> bool:
     upper = key_str.upper()
@@ -475,6 +405,15 @@ def is_garbage_text(key_str: str) -> bool:
             return True
     if ".ir" in key_str or ".cn" in key_str or "127.0.0.1" in key_str:
         return True
+    return False
+
+
+def is_hysteria2_russian(key_str: str) -> bool:
+    """Специально отсекает только российские Hysteria2 (msk.frkn.org)"""
+    lower = key_str.lower()
+    if "hysteria2" in lower or "hy2" in lower:
+        if "msk.frkn.org" in lower or "frkn" in lower:
+            return True
     return False
 
 def fetch_keys(urls, tag):
@@ -501,10 +440,9 @@ def fetch_keys(urls, tag):
                     continue
                 # ДОБАВЛЕНЫ ПРОТОКОЛЫ hy2:// и hysteria2://
                 if l.startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria2://")):
-                    if not is_valid_key(l):
+                    # Пропускаем только российские Hysteria2 (msk.frkn.org)
+                    if is_hysteria2_russian(l):
                         continue
-                    # if tag == "MY" and is_garbage_text(l):
-                    #     continue
                     out.append((l, tag))
         except Exception:
             pass
@@ -595,8 +533,7 @@ def check_single_key(data):
 
     latency = int((time.time() - start) * 1000)
     country_exit = detect_exit_country_via_http(host)
-    org = None
-    isp = None
+
     if country_exit == "UNKNOWN":
         country_exit = get_country_fast(host, key)
         if country_exit == "UNKNOWN":
@@ -604,16 +541,7 @@ def check_single_key(data):
         else:
             _inc_geo_stat("fast")
 
-    # Достаём org/isp из кэша для новой функции
-    ip = resolve_host(host)
-    if ip:
-        with _ip_cache_lock:
-            cached = _disk_ip_cache.get(ip)
-        if cached:
-            org = cached.get("org", None)
-            isp = cached.get("isp", None)
-
-    return latency, tag, country_exit, host, key, None, org, isp
+    return latency, tag, country_exit, host, key, None
 
 def make_final_key(k_id, latency, country):
     title_ru = country_to_title_ru(country)
@@ -734,7 +662,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
         subs_lines.append("=== 🇷🇺 RUSSIA (ALL) ===")
         for fname in ru_all_nonempty:
             file_path = os.path.join(FOLDER_RU, fname)
-            mtime = int(os.getmtime(file_path)) if os.path.exists(file_path) else ""
+            mtime = int(os.path.getmtime(file_path)) if os.path.exists(file_path) else ""
             subs_lines.append(f"{BASE_RAW}/checked/RU_Best/{fname}?ts={mtime}")
         subs_lines.append("")
 
@@ -744,7 +672,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
         subs_lines.append("=== 🇪🇺 EUROPE (FAST) ===")
         for filename in euro_fast_nonempty:
             file_path = os.path.join(FOLDER_EURO, filename)
-            mtime = int(os.getmtime(file_path)) if os.path.exists(file_path) else ""
+            mtime = int(os.path.getmtime(file_path)) if os.path.exists(file_path) else ""
             subs_lines.append(f"{BASE_RAW}/checked/My_Euro/{filename}?ts={mtime}")
         subs_lines.append("")
 
@@ -754,7 +682,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
         subs_lines.append("=== 🇪🇺 EUROPE (ALL) ===")
         for fname in euro_all_nonempty:
             file_path = os.path.join(FOLDER_EURO, fname)
-            mtime = int(os.getmtime(file_path)) if os.path.exists(file_path) else ""
+            mtime = int(os.path.getmtime(file_path)) if os.path.exists(file_path) else ""
             subs_lines.append(f"{BASE_RAW}/checked/My_Euro/{fname}?ts={mtime}")
         subs_lines.append("")
 
@@ -762,7 +690,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
     ru_white_path = os.path.join(FOLDER_RU, "ru_white_all_WHITE.txt")
     if os.path.exists(ru_white_path) and os.path.getsize(ru_white_path) > 0:
         subs_lines.append("=== ✅ WHITE RUSSIA (ALL) ===")
-        mtime = int(os.getmtime(ru_white_path))
+        mtime = int(os.path.getmtime(ru_white_path))
         subs_lines.append(f"{BASE_RAW}/checked/RU_Best/ru_white_all_WHITE.txt?ts={mtime}")
         subs_lines.append("")
 
@@ -770,7 +698,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
     euro_white_path = os.path.join(FOLDER_EURO, "my_euro_all_WHITE.txt")
     if os.path.exists(euro_white_path) and os.path.getsize(euro_white_path) > 0:
         subs_lines.append("=== ✅ WHITE EUROPE (ALL) ===")
-        mtime = int(os.getmtime(euro_white_path))
+        mtime = int(os.path.getmtime(euro_white_path))
         subs_lines.append(f"{BASE_RAW}/checked/My_Euro/my_euro_all_WHITE.txt?ts={mtime}")
         subs_lines.append("")
 
@@ -778,7 +706,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
     ru_black_path = os.path.join(FOLDER_RU, "ru_white_all_BLACK.txt")
     if os.path.exists(ru_black_path) and os.path.getsize(ru_black_path) > 0:
         subs_lines.append("=== ⚠️ BLACK RUSSIA (ALL) ===")
-        mtime = int(os.getmtime(ru_black_path))
+        mtime = int(os.path.getmtime(ru_black_path))
         subs_lines.append(f"{BASE_RAW}/checked/RU_Best/ru_white_all_BLACK.txt?ts={mtime}")
         subs_lines.append("")
 
@@ -786,7 +714,7 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
     euro_black_path = os.path.join(FOLDER_EURO, "my_euro_all_BLACK.txt")
     if os.path.exists(euro_black_path) and os.path.getsize(euro_black_path) > 0:
         subs_lines.append("=== ⚠️ BLACK EUROPE (ALL) ===")
-        mtime = int(os.getmtime(euro_black_path))
+        mtime = int(os.path.getmtime(euro_black_path))
         subs_lines.append(f"{BASE_RAW}/checked/My_Euro/my_euro_all_BLACK.txt?ts={mtime}")
 
     subs_path = os.path.join(BASE_DIR, "subscriptions_list.txt")
@@ -860,7 +788,7 @@ if __name__ == "__main__":
             for future in as_completed(future_map):
                 key, tag = future_map[future]
                 try:
-                    latency, _, country, host, original_key, err_type, org, isp = future.result()
+                    latency, _, country, host, original_key, err_type = future.result()
                 except Exception:
                     if tag == "RU":
                         dead_ru.append(key)
@@ -885,7 +813,7 @@ if __name__ == "__main__":
                 if tag == "RU":
                     res_ru.append(final)
                 elif tag == "MY":
-                    if is_russian_exit(original_key, host, country, org, isp):
+                    if is_russian_exit(original_key, host, country):
                         euro_filtered_ru += 1
                         dead_euro.append(original_key)
                     else:
@@ -911,9 +839,8 @@ if __name__ == "__main__":
     print(f"  RU: {len(res_ru_clean)} ключей")
     print(f"  EURO: {len(res_euro_clean)} ключей")
 
-    # Жёстче режем FAST: только реально быстрые
-    res_ru_fast = [k for k in res_ru_clean if extract_ping(k) is not None and extract_ping(k) <= 1300][:FAST_LIMIT]
-    res_euro_fast = [k for k in res_euro_clean if extract_ping(k) is not None and extract_ping(k) <= 1500][:FAST_LIMIT]
+    res_ru_fast = res_ru_clean[:FAST_LIMIT]
+    res_euro_fast = res_euro_clean[:FAST_LIMIT]
 
     print(f"\n🚀 FAST слои (топ {FAST_LIMIT}):")
     print(f"  RU FAST: {len(res_ru_fast)}")
