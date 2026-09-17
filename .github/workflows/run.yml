@@ -35,6 +35,7 @@ jobs:
 
     - name: Run checker script
       run: python checker.py
+      continue-on-error: false   # чтобы сразу падал, если что-то не так
 
     - name: Commit and Push changes
       run: |
