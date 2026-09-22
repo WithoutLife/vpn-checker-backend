@@ -28,24 +28,24 @@ if os.path.exists(FOLDER_EURO):
 os.makedirs(FOLDER_RU, exist_ok=True)
 os.makedirs(FOLDER_EURO, exist_ok=True)
 
-TIMEOUT = 10
+TIMEOUT = 8
 socket.setdefaulttimeout(TIMEOUT)
-THREADS = 40
+THREADS = 80
 
 CACHE_HOURS = 6
 CHUNK_LIMIT = 1000
 EURO_CHUNK_LIMIT = 500
-MAX_KEYS_TO_CHECK = 40000
+MAX_KEYS_TO_CHECK = 20000
 
 MAX_PING_MS = 10000
-FAST_LIMIT = 3000
+FAST_LIMIT = 1500
 MAX_HISTORY_AGE = 2 * 24 * 3600
 
 # ---- Настройки доп. фильтрации ----
 GOOD_PORTS = {443, 8443, 2053, 2083, 2087, 2096, 2082, 2086, 8880, 80, 8080}
 CHECK_HTTP = True
 HTTP_CHECK_URL = "http://cp.cloudflare.com/generate_204"
-HTTP_CHECK_TIMEOUT = 6
+HTTP_CHECK_TIMEOUT = 4
 
 # Дисковый кэш IP → страна
 IP_CACHE_FILE = os.path.join(BASE_DIR, "ip_cache.json")
