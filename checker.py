@@ -35,17 +35,22 @@ THREADS = 40
 CACHE_HOURS = 6
 CHUNK_LIMIT = 1000
 EURO_CHUNK_LIMIT = 500
-MAX_KEYS_TO_CHECK = 40000  # уменьшено
+MAX_KEYS_TO_CHECK = 40000
 
 MAX_PING_MS = 10000
 FAST_LIMIT = 3000
 MAX_HISTORY_AGE = 2 * 24 * 3600
 
+# ---- Настройки доп. фильтрации ----
+GOOD_PORTS = {443, 8443, 2053, 2083, 2087, 2096, 2082, 2086, 8880, 80, 8080}
+CHECK_HTTP = True
+HTTP_CHECK_URL = "http://cp.cloudflare.com/generate_204"
+HTTP_CHECK_TIMEOUT = 6
+
 # Дисковый кэш IP → страна
 IP_CACHE_FILE = os.path.join(BASE_DIR, "ip_cache.json")
 IP_CACHE_MAX_AGE_DAYS = 30
 
-# ip-api: не более ~40 req/min — берём 38 для запаса
 GEO_API_RATE_LIMIT = 38
 GEO_API_WINDOW = 60.0
 
@@ -55,9 +60,7 @@ EURO_FILES = ["my_euro_part1.txt", "my_euro_part2.txt", "my_euro_part3.txt"]
 HISTORY_FILE = os.path.join(BASE_DIR, "history.json")
 MY_CHANNEL = "@vlesstrojan"
 
-# ==================== ОБНОВЛЁННЫЙ СПИСОК URLS_RU ====================
 URLS_RU = [
-    # старые источники (сохраняем все, что были)
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Base64/BLACK_SS+All_RUS_base64.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Base64/BLACK_VLESS_RUS_base64.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Base64/BLACK_VLESS_RUS_mobile_base64.txt",
@@ -122,8 +125,6 @@ URLS_RU = [
     "https://raw.githubusercontent.com/mbelspb-gif/gdffgd/refs/heads/main/Swordware.net",
     "https://gist.githubusercontent.com/flaafix/c79a81037d15163360571c7a7331b153/raw/AetrisVPN.txt",
     "https://raw.githubusercontent.com/HalyavusVPNUS/halyava-vpn-lte/refs/heads/main/lte.txt",
-
-    # ---------- НОВЫЕ ИСТОЧНИКИ (добавлены 09.07.2026) ----------
     "https://tinyurl.com/freesub-scalavpnrobot",
     "https://raw.githubusercontent.com/Ilyacom4ik/free-v2ray-2026/refs/heads/main/subscriptions/FreeCFGHub1.txt",
     "https://raw.githubusercontent.com/uretkavpn/Uretkavpn/refs/heads/main/UretkaVpn.txt",
@@ -160,24 +161,18 @@ URLS_RU = [
     "https://raw.githubusercontent.com/kama55726/KomaryServers/main/White-List-2"
 ]
 
-# ==================== КОМБИНИРОВАННЫЙ URLS_MY (старые + clean) ====================
 URLS_MY = [
-    # ---------- СТАРЫЕ ИСТОЧНИКИ (ДАВАЛИ ЕВРОПУ 18.07) ----------
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/archive/subscriptions/all_base64.txt",
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/archive/subscriptions/all.txt",
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/archive/subscriptions/sni_filtered_base64.txt",
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/archive/my_sources/generated/vless.txt",
-
-    # ---------- НОВЫЕ CLEAN-ФАЙЛЫ ----------
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/refs/heads/main/data/githubmirror/clean/vless.txt",
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/refs/heads/main/data/githubmirror/clean/hy2.txt",
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/refs/heads/main/data/githubmirror/clean/hysteria2.txt",
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/refs/heads/main/data/githubmirror/clean/ss.txt",
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/refs/heads/main/data/githubmirror/clean/trojan.txt",
-
-    # ---------- ОПЦИОНАЛЬНО: all_new.txt и cf_fresh.txt ----------
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/refs/heads/main/data/githubmirror/new/all_new.txt",
-    "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/refs/heads/main/data/githubmirror/new/cf_fresh.txt",
+    "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/refs/heads/main/data/githubmirror/new/cf_fresh.txt"
 ]
 
 EURO_CODES = {
@@ -193,8 +188,6 @@ RU_MARKERS_STRICT = [
     "95.108.", "213.180.", "195.208.",
     "91.108.", "149.154.",
 ]
-
-# ------------------ Страна → название + флаг ------------------
 
 COUNTRY_NAMES_RU = {
     "RU": "Россия", "NL": "Нидерланды", "DE": "Германия", "FI": "Финляндия",
@@ -219,7 +212,6 @@ def country_to_title_ru(code: str) -> str:
 def country_to_flag(code: str) -> str:
     return COUNTRY_FLAGS.get(code, "")
 
-# ---------- FIX UNIVERSAL (исправляет type=xhttp -> http) ----------
 def fix_universal(key: str) -> str:
     key = key.strip()
     if not key.startswith("vless://") or "type=xhttp" not in key:
@@ -231,19 +223,10 @@ def fix_universal(key: str) -> str:
             query["type"] = ["http"]
         new_query = urllib.parse.urlencode(query, doseq=True)
         return urllib.parse.urlunparse(
-            (
-                parsed.scheme,
-                parsed.netloc,
-                parsed.path,
-                parsed.params,
-                new_query,
-                parsed.fragment,
-            )
+            (parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment)
         )
     except Exception:
         return key
-
-# ==================== GEO-API + КЭШИ ====================
 
 _disk_ip_cache: dict = {}
 
@@ -267,7 +250,6 @@ def save_ip_cache():
         pass
 
 _ip_cache_lock = threading.Lock()
-
 _host_to_ip: dict = {}
 _host_ip_lock = threading.Lock()
 
@@ -380,23 +362,17 @@ def _has_many_ru_markers(host: str, key_str: str) -> bool:
 def is_russian_exit(key_str: str, host: str, country: str) -> bool:
     if country == "RU":
         return True
-
     host_lower = host.lower()
     key_lower = key_str.lower()
-
     if host_lower.endswith(".ru"):
         return True
-
     for marker in RU_MARKERS_STRICT:
         if marker.lower() in host_lower:
             return True
-
     extra = [".ru", "moscow", "msk", "spb", "yandex", "vk.", "mail.ru", "sber", "россия", "москва", "selectel", "timeweb", "reg.ru"]
     if any(h in host_lower or h in key_lower for h in extra):
         return True
-
     return False
-
 
 def is_garbage_text(key_str: str) -> bool:
     upper = key_str.upper()
@@ -407,9 +383,7 @@ def is_garbage_text(key_str: str) -> bool:
         return True
     return False
 
-
 def is_hysteria2_russian(key_str: str) -> bool:
-    """Специально отсекает только российские Hysteria2 (msk.frkn.org)"""
     lower = key_str.lower()
     if "hysteria2" in lower or "hy2" in lower:
         if "msk.frkn.org" in lower or "frkn" in lower:
@@ -438,9 +412,7 @@ def fetch_keys(urls, tag):
                 l = l.strip()
                 if len(l) > 2000:
                     continue
-                # ДОБАВЛЕНЫ ПРОТОКОЛЫ hy2:// и hysteria2://
                 if l.startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria2://")):
-                    # Пропускаем только российские Hysteria2 (msk.frkn.org)
                     if is_hysteria2_russian(l):
                         continue
                     out.append((l, tag))
@@ -460,17 +432,54 @@ def _inc_err(kind: str):
     with _err_stats_lock:
         _err_stats[kind] += 1
 
-def check_single_key(data):
-    key, tag = data
+def _extract_host_port(key: str):
     try:
         if "@" not in key or ":" not in key:
-            return None, None, None, None, key, ERR_OTHER
+            return None, None
         part = key.split("@")[1].split("?")[0].split("#")[0]
         host_port = part.split(":")
-        host = host_port[0]
-        port = int(host_port[1])
+        if len(host_port) < 2:
+            return None, None
+        return host_port[0], int(host_port[1])
     except Exception:
+        return None, None
+
+def _http_probe(host: str, port: int, is_tls: bool) -> bool:
+    try:
+        if is_tls:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            raw = socket.create_connection((host, port), timeout=HTTP_CHECK_TIMEOUT)
+            sock = context.wrap_socket(raw, server_hostname=host)
+        else:
+            sock = socket.create_connection((host, port), timeout=HTTP_CHECK_TIMEOUT)
+        with sock:
+            req = (
+                f"GET /generate_204 HTTP/1.1\r\n"
+                f"Host: cp.cloudflare.com\r\n"
+                f"User-Agent: Mozilla/5.0\r\n"
+                f"Connection: close\r\n\r\n"
+            )
+            sock.sendall(req.encode())
+            sock.settimeout(HTTP_CHECK_TIMEOUT)
+            try:
+                data = sock.recv(128)
+                return bool(data)
+            except socket.timeout:
+                return False
+    except Exception:
+        return False
+
+def check_single_key(data):
+    key, tag = data
+    host, port = _extract_host_port(key)
+    if not host or not port:
         return None, None, None, None, key, ERR_OTHER
+
+    if port not in GOOD_PORTS:
+        _inc_err("badport")
+        return None, None, None, None, key, "badport"
 
     if tag == "MY":
         fast_hint = get_country_fast(host, key)
@@ -531,16 +540,19 @@ def check_single_key(data):
         _inc_err(ERR_OTHER)
         return None, None, None, None, key, ERR_OTHER
 
+    if CHECK_HTTP and not is_ws:
+        if not _http_probe(host, port, is_tls):
+            _inc_err("http_fail")
+            return None, None, None, None, key, "http_fail"
+
     latency = int((time.time() - start) * 1000)
     country_exit = detect_exit_country_via_http(host)
-
     if country_exit == "UNKNOWN":
         country_exit = get_country_fast(host, key)
         if country_exit == "UNKNOWN":
             _inc_geo_stat("unknown")
         else:
             _inc_geo_stat("fast")
-
     return latency, tag, country_exit, host, key, None
 
 def make_final_key(k_id, latency, country):
@@ -560,6 +572,27 @@ def extract_ping(key_str):
         return None
     except Exception:
         return None
+
+def dedupe_by_hostport(keys):
+    by_hostport = {}
+    backup = []
+    for k in keys:
+        host, port = _extract_host_port(k)
+        if not host or not port:
+            backup.append(k)
+            continue
+        hp = f"{host}:{port}"
+        ping = extract_ping(k)
+        if ping is None:
+            backup.append(k)
+            continue
+        if hp not in by_hostport or ping < extract_ping(by_hostport[hp]):
+            if hp in by_hostport:
+                backup.append(by_hostport[hp])
+            by_hostport[hp] = k
+        else:
+            backup.append(k)
+    return list(by_hostport.values()), backup
 
 def save_exact(keys, folder, filename):
     path = os.path.join(folder, filename)
@@ -646,7 +679,6 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
                 out.append(fname)
         return out
 
-    # RUSSIA FAST
     ru_fast_nonempty = nonempty_files(FOLDER_RU, ru_fast_files)
     if ru_fast_nonempty:
         subs_lines.append("=== 🇷🇺 RUSSIA (FAST) ===")
@@ -656,7 +688,6 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
             subs_lines.append(f"{BASE_RAW}/checked/RU_Best/{filename}?ts={mtime}")
         subs_lines.append("")
 
-    # RUSSIA ALL
     ru_all_nonempty = nonempty_files(FOLDER_RU, ru_all_files)
     if ru_all_nonempty:
         subs_lines.append("=== 🇷🇺 RUSSIA (ALL) ===")
@@ -666,7 +697,6 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
             subs_lines.append(f"{BASE_RAW}/checked/RU_Best/{fname}?ts={mtime}")
         subs_lines.append("")
 
-    # EUROPE FAST
     euro_fast_nonempty = nonempty_files(FOLDER_EURO, euro_fast_files)
     if euro_fast_nonempty:
         subs_lines.append("=== 🇪🇺 EUROPE (FAST) ===")
@@ -676,7 +706,6 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
             subs_lines.append(f"{BASE_RAW}/checked/My_Euro/{filename}?ts={mtime}")
         subs_lines.append("")
 
-    # EUROPE ALL
     euro_all_nonempty = nonempty_files(FOLDER_EURO, euro_all_files)
     if euro_all_nonempty:
         subs_lines.append("=== 🇪🇺 EUROPE (ALL) ===")
@@ -686,7 +715,6 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
             subs_lines.append(f"{BASE_RAW}/checked/My_Euro/{fname}?ts={mtime}")
         subs_lines.append("")
 
-    # WHITE RUSSIA
     ru_white_path = os.path.join(FOLDER_RU, "ru_white_all_WHITE.txt")
     if os.path.exists(ru_white_path) and os.path.getsize(ru_white_path) > 0:
         subs_lines.append("=== ✅ WHITE RUSSIA (ALL) ===")
@@ -694,7 +722,6 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
         subs_lines.append(f"{BASE_RAW}/checked/RU_Best/ru_white_all_WHITE.txt?ts={mtime}")
         subs_lines.append("")
 
-    # WHITE EUROPE
     euro_white_path = os.path.join(FOLDER_EURO, "my_euro_all_WHITE.txt")
     if os.path.exists(euro_white_path) and os.path.getsize(euro_white_path) > 0:
         subs_lines.append("=== ✅ WHITE EUROPE (ALL) ===")
@@ -702,7 +729,6 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
         subs_lines.append(f"{BASE_RAW}/checked/My_Euro/my_euro_all_WHITE.txt?ts={mtime}")
         subs_lines.append("")
 
-    # BLACK RUSSIA
     ru_black_path = os.path.join(FOLDER_RU, "ru_white_all_BLACK.txt")
     if os.path.exists(ru_black_path) and os.path.getsize(ru_black_path) > 0:
         subs_lines.append("=== ⚠️ BLACK RUSSIA (ALL) ===")
@@ -710,7 +736,6 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
         subs_lines.append(f"{BASE_RAW}/checked/RU_Best/ru_white_all_BLACK.txt?ts={mtime}")
         subs_lines.append("")
 
-    # BLACK EUROPE
     euro_black_path = os.path.join(FOLDER_EURO, "my_euro_all_BLACK.txt")
     if os.path.exists(euro_black_path) and os.path.getsize(euro_black_path) > 0:
         subs_lines.append("=== ⚠️ BLACK EUROPE (ALL) ===")
@@ -728,10 +753,8 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
             print(f"  {line}")
     return subs_path
 
-# ==================== MAIN ====================
-
 if __name__ == "__main__":
-    print("=== CHECKER v6 (FAST/ALL + WHITE/BLACK + GEO-CACHE + THROTTLE) ===")
+    print("=== CHECKER v6 (FAST/ALL + WHITE/BLACK + GEO-CACHE + THROTTLE + PORT/HTTP FILTER) ===")
     print(f"Параметры: CACHE={CACHE_HOURS}h, MAX_PING={MAX_PING_MS}ms, FAST={FAST_LIMIT}, HISTORY={MAX_HISTORY_AGE // 3600}h")
 
     load_ip_cache()
@@ -740,7 +763,6 @@ if __name__ == "__main__":
     history = load_json(HISTORY_FILE)
     tasks = fetch_keys(URLS_RU, "RU") + fetch_keys(URLS_MY, "MY")
 
-    # ОТЛАДОЧНЫЙ ВЫВОД
     ru_count = sum(1 for _, tag in tasks if tag == "RU")
     my_count = sum(1 for _, tag in tasks if tag == "MY")
     print(f"📥 Загружено RU: {ru_count}, MY: {my_count}")
@@ -826,7 +848,7 @@ if __name__ == "__main__":
 
     save_json(
         HISTORY_FILE,
-        {k: v for k, v in history.items() if current_time - v["time"] < MAX_HISTORY_AGE}
+        {k: v for k, v in history.items() if v.get("time", 0) and current_time - v["time"] < MAX_HISTORY_AGE}
     )
 
     res_ru_clean = [k for k in res_ru if extract_ping(k) is not None and extract_ping(k) <= MAX_PING_MS]
@@ -834,6 +856,16 @@ if __name__ == "__main__":
 
     res_ru_clean.sort(key=extract_ping)
     res_euro_clean.sort(key=extract_ping)
+
+    # --- дедупликация по host:port ---
+    res_ru_clean, ru_backup = dedupe_by_hostport(res_ru_clean)
+    res_euro_clean, euro_backup = dedupe_by_hostport(res_euro_clean)
+    print(f"\n🧹 Дедупликация по host:port:")
+    print(f"  RU: {len(res_ru_clean)} уникальных, {len(ru_backup)} в backup")
+    print(f"  EURO: {len(res_euro_clean)} уникальных, {len(euro_backup)} в backup")
+
+    save_exact(ru_backup, FOLDER_RU, "ru_white_all_BACKUP.txt")
+    save_exact(euro_backup, FOLDER_EURO, "my_euro_all_BACKUP.txt")
 
     print(f"\n📈 После фильтрации (≤ {MAX_PING_MS} ms) и сортировки:")
     print(f"  RU: {len(res_ru_clean)} ключей")
@@ -866,7 +898,6 @@ if __name__ == "__main__":
     save_exact(res_euro_clean, FOLDER_EURO, "my_euro_all_WHITE.txt")
     save_exact(dead_euro, FOLDER_EURO, "my_euro_all_BLACK.txt")
 
-    # Принудительная генерация subscriptions_list.txt с диагностикой
     try:
         generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, euro_all_files)
         print("✅ generate_subscriptions_list выполнен успешно")
@@ -875,13 +906,11 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
 
-    # Проверяем, что файл действительно создан
     subs_path = os.path.join(BASE_DIR, "subscriptions_list.txt")
     if os.path.exists(subs_path):
         print(f"✅ Файл {subs_path} существует, размер {os.path.getsize(subs_path)} байт")
     else:
         print(f"❌ Файл {subs_path} НЕ СУЩЕСТВУЕТ! Создаём резервный...")
-        # Создаём минимальный корректный файл, чтобы коммит прошёл
         with open(subs_path, "w", encoding="utf-8") as f:
             f.write("# Generated by fallback\n")
             f.write("=== 🇷🇺 RUSSIA (ALL) ===\n")
@@ -912,8 +941,9 @@ if __name__ == "__main__":
     with _err_stats_lock:
         estats = dict(_err_stats)
     total_err = sum(estats.values()) or 1
-    for kind in (ERR_TIMEOUT, ERR_TLS, ERR_DNS, ERR_OTHER):
+    for kind in (ERR_TIMEOUT, ERR_TLS, ERR_DNS, ERR_OTHER, "badport", "http_fail"):
         n = estats.get(kind, 0)
-        print(f"  {kind:8s}: {n:5d}  ({n * 100 // total_err}%)")
+        if n:
+            print(f"  {kind:12s}: {n:5d}  ({n * 100 // total_err}%)")
 
     print("\n✅ SUCCESS: FAST/ALL + WHITE/BLACK GENERATED")
