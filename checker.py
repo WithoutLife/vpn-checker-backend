@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import re
+import random
 import socket
 import ssl
 import time
@@ -42,7 +43,7 @@ FAST_LIMIT = 1500
 MAX_HISTORY_AGE = 2 * 24 * 3600
 
 # ---- Настройки доп. фильтрации ----
-GOOD_PORTS = {443, 8443, 2053, 2083, 2087, 2096, 2082, 2086, 8880, 80, 8080}
+# GOOD_PORTS убран — резал 34% живых конфигов
 CHECK_HTTP = True
 HTTP_CHECK_URL = "http://cp.cloudflare.com/generate_204"
 HTTP_CHECK_TIMEOUT = 4
@@ -477,10 +478,6 @@ def check_single_key(data):
     if not host or not port:
         return None, None, None, None, key, ERR_OTHER
 
-    if port not in GOOD_PORTS:
-        _inc_err("badport")
-        return None, None, None, None, key, "badport"
-
     if tag == "MY":
         fast_hint = get_country_fast(host, key)
         if fast_hint == "RU" and _has_many_ru_markers(host, key):
@@ -769,6 +766,8 @@ if __name__ == "__main__":
 
     unique_tasks = {k: tag for k, tag in tasks}
     all_items = list(unique_tasks.items())
+    random.seed(42)
+    random.shuffle(all_items)
     if len(all_items) > MAX_KEYS_TO_CHECK:
         all_items = all_items[:MAX_KEYS_TO_CHECK]
 
