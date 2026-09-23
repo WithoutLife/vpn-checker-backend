@@ -36,7 +36,7 @@ THREADS = 80
 CACHE_HOURS = 6
 CHUNK_LIMIT = 1000
 EURO_CHUNK_LIMIT = 500
-MAX_KEYS_TO_CHECK = 20000
+MAX_KEYS_TO_CHECK = 50000
 
 MAX_PING_MS = 10000
 FAST_LIMIT = 1500
@@ -47,6 +47,11 @@ MAX_HISTORY_AGE = 2 * 24 * 3600
 CHECK_HTTP = True
 HTTP_CHECK_URL = "http://cp.cloudflare.com/generate_204"
 HTTP_CHECK_TIMEOUT = 4
+
+# ---- Умный отбор ----
+# Приоритет: свежие из истории > новые ключи > остальные
+SMART_SELECT = True
+HISTORY_BONUS = True  # поднимать в начало списка тех, кто был жив
 
 # Дисковый кэш IP → страна
 IP_CACHE_FILE = os.path.join(BASE_DIR, "ip_cache.json")
@@ -445,14 +450,26 @@ def _extract_host_port(key: str):
     except Exception:
         return None, None
 
-def _http_probe(host: str, port: int, is_tls: bool) -> bool:
+def _extract_sni(key: str, host: str) -> str:
+    """Достаёт SNI из ключа. Если нет — возвращает host."""
+    try:
+        sni_match = re.search(r"sni=([^&]+)", key)
+        if sni_match:
+            return unquote(sni_match.group(1))
+    except Exception:
+        pass
+    return host
+
+def _http_probe(host: str, port: int, is_tls: bool, sni: str = None) -> bool:
+    if sni is None:
+        sni = host
     try:
         if is_tls:
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
             raw = socket.create_connection((host, port), timeout=HTTP_CHECK_TIMEOUT)
-            sock = context.wrap_socket(raw, server_hostname=host)
+            sock = context.wrap_socket(raw, server_hostname=sni)
         else:
             sock = socket.create_connection((host, port), timeout=HTTP_CHECK_TIMEOUT)
         with sock:
@@ -477,6 +494,8 @@ def check_single_key(data):
     host, port = _extract_host_port(key)
     if not host or not port:
         return None, None, None, None, key, ERR_OTHER
+
+    sni = _extract_sni(key, host)
 
     if tag == "MY":
         fast_hint = get_country_fast(host, key)
@@ -512,7 +531,7 @@ def check_single_key(data):
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
             with socket.create_connection((host, port), timeout=TIMEOUT) as sock:
-                with context.wrap_socket(sock, server_hostname=host):
+                with context.wrap_socket(sock, server_hostname=sni):
                     pass
         else:
             with socket.create_connection((host, port), timeout=TIMEOUT):
@@ -538,7 +557,7 @@ def check_single_key(data):
         return None, None, None, None, key, ERR_OTHER
 
     if CHECK_HTTP and not is_ws:
-        if not _http_probe(host, port, is_tls):
+        if not _http_probe(host, port, is_tls, sni):
             _inc_err("http_fail")
             return None, None, None, None, key, "http_fail"
 
@@ -590,6 +609,39 @@ def dedupe_by_hostport(keys):
         else:
             backup.append(k)
     return list(by_hostport.values()), backup
+
+def smart_select(all_items, history, max_count):
+    """
+    Умный отбор ключей:
+    1. Сначала живые из истории (были живы недавно)
+    2. Потом все остальные в случайном порядке
+    """
+    if not SMART_SELECT:
+        random.seed(42)
+        random.shuffle(all_items)
+        return all_items[:max_count]
+
+    alive_from_history = []
+    others = []
+
+    for item in all_items:
+        k, tag = item
+        k_id = k.split("#")[0]
+        cached = history.get(k_id)
+        if cached and cached.get("alive"):
+            alive_from_history.append(item)
+        else:
+            others.append(item)
+
+    random.seed(42)
+    random.shuffle(others)
+
+    print(f"🧠 Умный отбор:")
+    print(f"  Живых из истории: {len(alive_from_history)}")
+    print(f"  Остальных: {len(others)}")
+
+    combined = alive_from_history + others
+    return combined[:max_count]
 
 def save_exact(keys, folder, filename):
     path = os.path.join(folder, filename)
@@ -751,13 +803,15 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
     return subs_path
 
 if __name__ == "__main__":
-    print("=== CHECKER v6 (FAST/ALL + WHITE/BLACK + GEO-CACHE + THROTTLE + PORT/HTTP FILTER) ===")
-    print(f"Параметры: CACHE={CACHE_HOURS}h, MAX_PING={MAX_PING_MS}ms, FAST={FAST_LIMIT}, HISTORY={MAX_HISTORY_AGE // 3600}h")
+    print("=== CHECKER v7 (SMART SELECT + SNI + HTTP PROBE) ===")
+    print(f"Параметры: CACHE={CACHE_HOURS}h, MAX_PING={MAX_PING_MS}ms, FAST={FAST_LIMIT}, HISTORY={MAX_HISTORY_AGE // 3600}h, MAX_KEYS={MAX_KEYS_TO_CHECK}")
 
     load_ip_cache()
     print(f"📂 Дисковый ip_cache загружен: {len(_disk_ip_cache)} записей")
 
     history = load_json(HISTORY_FILE)
+    print(f"📂 История загружена: {len(history)} записей")
+
     tasks = fetch_keys(URLS_RU, "RU") + fetch_keys(URLS_MY, "MY")
 
     ru_count = sum(1 for _, tag in tasks if tag == "RU")
@@ -766,10 +820,10 @@ if __name__ == "__main__":
 
     unique_tasks = {k: tag for k, tag in tasks}
     all_items = list(unique_tasks.items())
-    random.seed(42)
-    random.shuffle(all_items)
-    if len(all_items) > MAX_KEYS_TO_CHECK:
-        all_items = all_items[:MAX_KEYS_TO_CHECK]
+    print(f"📊 Уникальных ключей всего: {len(all_items)}")
+
+    all_items = smart_select(all_items, history, MAX_KEYS_TO_CHECK)
+    print(f"📊 Отобрано для проверки: {len(all_items)}")
 
     current_time = time.time()
     to_check = []
@@ -778,8 +832,6 @@ if __name__ == "__main__":
     dead_ru = []
     dead_euro = []
     euro_filtered_ru = 0
-
-    print(f"\n📊 Всего уникальных ключей: {len(all_items)}")
 
     for k, tag in all_items:
         k_id = k.split("#")[0]
@@ -856,7 +908,6 @@ if __name__ == "__main__":
     res_ru_clean.sort(key=extract_ping)
     res_euro_clean.sort(key=extract_ping)
 
-    # --- дедупликация по host:port ---
     res_ru_clean, ru_backup = dedupe_by_hostport(res_ru_clean)
     res_euro_clean, euro_backup = dedupe_by_hostport(res_euro_clean)
     print(f"\n🧹 Дедупликация по host:port:")
@@ -940,7 +991,7 @@ if __name__ == "__main__":
     with _err_stats_lock:
         estats = dict(_err_stats)
     total_err = sum(estats.values()) or 1
-    for kind in (ERR_TIMEOUT, ERR_TLS, ERR_DNS, ERR_OTHER, "badport", "http_fail"):
+    for kind in (ERR_TIMEOUT, ERR_TLS, ERR_DNS, ERR_OTHER, "http_fail"):
         n = estats.get(kind, 0)
         if n:
             print(f"  {kind:12s}: {n:5d}  ({n * 100 // total_err}%)")
