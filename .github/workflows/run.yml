@@ -35,7 +35,7 @@ jobs:
 
     - name: Install Xray
       run: |
-        bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+        sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
         xray version
 
     - name: Run checker script
