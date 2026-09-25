@@ -8,16 +8,17 @@ import time
 import json
 import requests
 import base64
-import websocket
 import shutil
 import threading
 import urllib.parse
+import subprocess
+import tempfile
 from datetime import datetime, timezone
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 
-# ------------------ Настройки ------------------
+# ------------------ 设置 ------------------
 BASE_DIR = "checked"
 FOLDER_RU = os.path.join(BASE_DIR, "RU_Best")
 FOLDER_EURO = os.path.join(BASE_DIR, "My_Euro")
@@ -29,36 +30,22 @@ if os.path.exists(FOLDER_EURO):
 os.makedirs(FOLDER_RU, exist_ok=True)
 os.makedirs(FOLDER_EURO, exist_ok=True)
 
-TIMEOUT = 8
-socket.setdefaulttimeout(TIMEOUT)
-THREADS = 80
-
-CACHE_HOURS = 6
+THREADS = 15
+CACHE_HOURS = 3
 CHUNK_LIMIT = 1000
 EURO_CHUNK_LIMIT = 500
-MAX_KEYS_TO_CHECK = 50000
+MAX_KEYS_TO_CHECK = 200
 
-MAX_PING_MS = 10000
+MAX_PING_MS = 15000
 FAST_LIMIT = 1500
-MAX_HISTORY_AGE = 2 * 24 * 3600
+MAX_HISTORY_AGE = 6 * 3600
 
-# ---- Настройки доп. фильтрации ----
-# GOOD_PORTS убран — резал 34% живых конфигов
-CHECK_HTTP = True
-HTTP_CHECK_URL = "http://cp.cloudflare.com/generate_204"
-HTTP_CHECK_TIMEOUT = 4
+SING_BOX_CHECK_TIMEOUT = 10
+SING_BOX_START_TIMEOUT = 3
+SOCKS_PORT_BASE = 20000
 
-# ---- Умный отбор ----
-# Приоритет: свежие из истории > новые ключи > остальные
-SMART_SELECT = True
-HISTORY_BONUS = True  # поднимать в начало списка тех, кто был жив
-
-# Дисковый кэш IP → страна
 IP_CACHE_FILE = os.path.join(BASE_DIR, "ip_cache.json")
 IP_CACHE_MAX_AGE_DAYS = 30
-
-GEO_API_RATE_LIMIT = 38
-GEO_API_WINDOW = 60.0
 
 RU_FILES = ["ru_white_part1.txt", "ru_white_part2.txt", "ru_white_part3.txt", "ru_white_part4.txt"]
 EURO_FILES = ["my_euro_part1.txt", "my_euro_part2.txt", "my_euro_part3.txt"]
@@ -181,58 +168,163 @@ URLS_MY = [
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/refs/heads/main/data/githubmirror/new/cf_fresh.txt"
 ]
 
-EURO_CODES = {
-    "NL", "DE", "FI", "GB", "FR", "SE", "PL", "CZ", "AT", "CH",
-    "IT", "ES", "NO", "DK", "BE", "IE", "LU", "EE", "LV", "LT"
-}
-BAD_MARKERS = ["CN", "IR", "KR", "BR", "IN", "RELAY", "POOL", "🇨🇳", "🇮🇷", "🇰🇷"]
+# ------------------ 链接解析工具 ------------------
 
-RU_MARKERS_STRICT = [
-    ".ru", "moscow", "msk", "spb", "saint-peter", "russia",
-    "россия", "москва", "питер", "ru-", "-ru.",
-    "178.154.", "77.88.", "5.255.", "87.250.",
-    "95.108.", "213.180.", "195.208.",
-    "91.108.", "149.154.",
-]
-
-COUNTRY_NAMES_RU = {
-    "RU": "Россия", "NL": "Нидерланды", "DE": "Германия", "FI": "Финляндия",
-    "GB": "Великобритания", "FR": "Франция", "SE": "Швеция", "PL": "Польша",
-    "CZ": "Чехия", "AT": "Австрия", "CH": "Швейцария", "IT": "Италия",
-    "ES": "Испания", "NO": "Норвегия", "DK": "Дания", "BE": "Бельгия",
-    "IE": "Ирландия", "LU": "Люксембург", "EE": "Эстония", "LV": "Латвия",
-    "LT": "Литва",
-}
-
-COUNTRY_FLAGS = {
-    "RU": "🇷🇺", "NL": "🇳🇱", "DE": "🇩🇪", "FI": "🇫🇮", "GB": "🇬🇧",
-    "FR": "🇫🇷", "SE": "🇸🇪", "PL": "🇵🇱", "CZ": "🇨🇿", "AT": "🇦🇹",
-    "CH": "🇨🇭", "IT": "🇮🇹", "ES": "🇪🇸", "NO": "🇳🇴", "DK": "🇩🇰",
-    "BE": "🇧🇪", "IE": "🇮🇪", "LU": "🇱🇺", "EE": "🇪🇪", "LV": "🇱🇻",
-    "LT": "🇱🇹",
-}
-
-def country_to_title_ru(code: str) -> str:
-    return COUNTRY_NAMES_RU.get(code, code or "UNKNOWN")
-
-def country_to_flag(code: str) -> str:
-    return COUNTRY_FLAGS.get(code, "")
-
-def fix_universal(key: str) -> str:
-    key = key.strip()
-    if not key.startswith("vless://") or "type=xhttp" not in key:
-        return key
+def _safe_int(v, default=0):
     try:
-        parsed = urllib.parse.urlparse(key)
-        query = urllib.parse.parse_qs(parsed.query)
-        if query.get("type", [""])[0].lower() == "xhttp":
-            query["type"] = ["http"]
-        new_query = urllib.parse.urlencode(query, doseq=True)
-        return urllib.parse.urlunparse(
-            (parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment)
-        )
+        return int(v)
     except Exception:
-        return key
+        return default
+
+def parse_vless(url):
+    try:
+        p = urlparse(url)
+        q = parse_qs(p.query)
+        uuid = p.username or ""
+        host = p.hostname or ""
+        port = p.port or 443
+        params = {k: v[0] if v else "" for k, v in q.items()}
+        name = unquote(p.fragment) if p.fragment else ""
+        return {
+            "type": "vless", "uuid": uuid, "host": host, "port": port,
+            "params": params, "name": name
+        }
+    except Exception:
+        return None
+
+def parse_vmess(url):
+    try:
+        b64 = url.replace("vmess://", "")
+        decoded = base64.b64decode(b64 + "==").decode("utf-8", errors="ignore")
+        cfg = json.loads(decoded)
+        return {
+            "type": "vmess",
+            "uuid": cfg.get("id", ""),
+            "host": cfg.get("add", ""),
+            "port": _safe_int(cfg.get("port"), 443),
+            "params": {
+                "net": cfg.get("net", "tcp"),
+                "tls": cfg.get("tls", ""),
+                "sni": cfg.get("sni", ""),
+                "host": cfg.get("host", ""),
+                "path": cfg.get("path", "/"),
+            },
+            "name": cfg.get("ps", ""),
+        }
+    except Exception:
+        return None
+
+def parse_trojan(url):
+    try:
+        p = urlparse(url)
+        q = parse_qs(p.query)
+        return {
+            "type": "trojan",
+            "password": p.username or "",
+            "host": p.hostname or "",
+            "port": p.port or 443,
+            "params": {k: v[0] if v else "" for k, v in q.items()},
+            "name": unquote(p.fragment) if p.fragment else "",
+        }
+    except Exception:
+        return None
+
+def parse_shadowsocks(url):
+    try:
+        raw = url.replace("ss://", "")
+        if "#" in raw:
+            raw, name = raw.split("#", 1)
+            name = unquote(name)
+        else:
+            name = ""
+        if "@" not in raw:
+            try:
+                decoded = base64.b64decode(raw + "==").decode("utf-8", errors="ignore")
+                raw = decoded
+            except Exception:
+                pass
+        if "@" not in raw:
+            return None
+        method_pwd, host_port = raw.split("@", 1)
+        if ":" not in host_port:
+            return None
+        host, port_str = host_port.split(":", 1)
+        port = _safe_int(port_str.replace("/", "").split("?")[0], 8388)
+        if ":" not in method_pwd:
+            try:
+                method_pwd = base64.b64decode(method_pwd + "==").decode("utf-8", errors="ignore")
+            except Exception:
+                return None
+        if ":" not in method_pwd:
+            return None
+        method, password = method_pwd.split(":", 1)
+        return {
+            "type": "shadowsocks", "method": method, "password": password,
+            "host": host, "port": port, "name": name,
+        }
+    except Exception:
+        return None
+
+def parse_hysteria2(url):
+    try:
+        raw = url.replace("hysteria2://", "").replace("hy2://", "")
+        if "#" in raw:
+            raw, name = raw.split("#", 1)
+            name = unquote(name)
+        else:
+            name = ""
+        if "@" not in raw:
+            return None
+        auth, rest = raw.split("@", 1)
+        host, rest = rest.split("?", 1) if "?" in rest else (rest, "")
+        if ":" in host:
+            host, port_str = host.rsplit(":", 1)
+            port = _safe_int(port_str, 443)
+        else:
+            port = 443
+        params = {}
+        if rest:
+            for pair in rest.split("&"):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    params[k] = unquote(v)
+        return {
+            "type": "hysteria2", "password": auth, "host": host,
+            "port": port, "params": params, "name": name,
+        }
+    except Exception:
+        return None
+
+def parse_proxy_url(url):
+    if url.startswith("vless://"):
+        return parse_vless(url)
+    if url.startswith("vmess://"):
+        return parse_vmess(url)
+    if url.startswith("trojan://"):
+        return parse_trojan(url)
+    if url.startswith("ss://"):
+        return parse_shadowsocks(url)
+    if url.startswith("hysteria2://") or url.startswith("hy2://"):
+        return parse_hysteria2(url)
+    return None
+
+def _extract_host_port(key: str):
+    try:
+        if "://" not in key:
+            return None, None
+        p = urlparse(key)
+        if p.hostname and p.port:
+            return p.hostname, p.port
+        if "@" in key:
+            part = key.split("@")[1].split("?")[0].split("#")[0]
+            host_port = part.split(":")
+            if len(host_port) >= 2:
+                return host_port[0], _safe_int(host_port[1])
+    except Exception:
+        pass
+    return None, None
+
+# ------------------ Geo-API и кэши ------------------
 
 _disk_ip_cache: dict = {}
 
@@ -259,7 +351,7 @@ _ip_cache_lock = threading.Lock()
 _host_to_ip: dict = {}
 _host_ip_lock = threading.Lock()
 
-def resolve_host(host: str) -> str | None:
+def resolve_host(host: str):
     with _host_ip_lock:
         if host in _host_to_ip:
             return _host_to_ip[host]
@@ -289,15 +381,15 @@ def _geo_api_wait_slot() -> bool:
         return False
     with _geo_rate_lock:
         now = time.time()
-        cutoff = now - GEO_API_WINDOW
+        cutoff = now - 60.0
         while _geo_request_times and _geo_request_times[0] < cutoff:
             _geo_request_times.pop(0)
-        if len(_geo_request_times) >= GEO_API_RATE_LIMIT:
-            sleep_time = GEO_API_WINDOW - (now - _geo_request_times[0]) + 0.1
+        if len(_geo_request_times) >= 38:
+            sleep_time = 60.0 - (now - _geo_request_times[0]) + 0.1
             if sleep_time > 0:
                 time.sleep(sleep_time)
             now = time.time()
-            cutoff = now - GEO_API_WINDOW
+            cutoff = now - 60.0
             while _geo_request_times and _geo_request_times[0] < cutoff:
                 _geo_request_times.pop(0)
         _geo_request_times.append(time.time())
@@ -321,7 +413,7 @@ def detect_exit_country_via_http(proxy_host: str) -> str:
         r = requests.get(f"http://ip-api.com/json/{ip}?fields=countryCode", timeout=4)
         if r.status_code == 429:
             _ip_api_disabled = True
-            print("⚠️  ip-api вернул 429 (rate limit) — geo-API отключён до конца запуска")
+            print("⚠️  ip-api вернул 429 — geo-API отключён до конца запуска")
             return "UNKNOWN"
         if r.status_code == 200:
             code = r.json().get("countryCode", "UNKNOWN") or "UNKNOWN"
@@ -332,6 +424,11 @@ def detect_exit_country_via_http(proxy_host: str) -> str:
     except Exception:
         pass
     return "UNKNOWN"
+
+EURO_CODES = {
+    "NL", "DE", "FI", "GB", "FR", "SE", "PL", "CZ", "AT", "CH",
+    "IT", "ES", "NO", "DK", "BE", "IE", "LU", "EE", "LV", "LT"
+}
 
 def get_country_fast(host: str, key_name: str) -> str:
     try:
@@ -354,18 +451,349 @@ def get_country_fast(host: str, key_name: str) -> str:
         pass
     return "UNKNOWN"
 
-def _has_many_ru_markers(host: str, key_str: str) -> bool:
-    count = 0
-    host_lower = host.lower()
-    key_upper = key_str.upper()
-    for marker in RU_MARKERS_STRICT:
-        if marker.lower() in host_lower or marker.upper() in key_upper:
-            count += 1
-            if count >= 2:
+COUNTRY_NAMES_RU = {
+    "RU": "Россия", "NL": "Нидерланды", "DE": "Германия", "FI": "Финляндия",
+    "GB": "Великобритания", "FR": "Франция", "SE": "Швеция", "PL": "Польша",
+    "CZ": "Чехия", "AT": "Австрия", "CH": "Швейцария", "IT": "Италия",
+    "ES": "Испания", "NO": "Норвегия", "DK": "Дания", "BE": "Бельгия",
+    "IE": "Ирландия", "LU": "Люксембург", "EE": "Эстония", "LV": "Латвия",
+    "LT": "Литва",
+}
+COUNTRY_FLAGS = {
+    "RU": "🇷🇺", "NL": "🇳🇱", "DE": "🇩🇪", "FI": "🇫🇮", "GB": "🇬🇧",
+    "FR": "🇫🇷", "SE": "🇸🇪", "PL": "🇵🇱", "CZ": "🇨🇿", "AT": "🇦🇹",
+    "CH": "🇨🇭", "IT": "🇮🇹", "ES": "🇪🇸", "NO": "🇳🇴", "DK": "🇩🇰",
+    "BE": "🇧🇪", "IE": "🇮🇪", "LU": "🇱🇺", "EE": "🇪🇪", "LV": "🇱🇻",
+    "LT": "🇱🇹",
+}
+
+def country_to_title_ru(code: str) -> str:
+    return COUNTRY_NAMES_RU.get(code, code or "UNKNOWN")
+
+def country_to_flag(code: str) -> str:
+    return COUNTRY_FLAGS.get(code, "")
+
+# ------------------ Генератор sing-box конфига ------------------
+
+def build_sing_box_config(parsed, socks_port):
+    """
+    Собирает JSON-конфиг для sing-box из распарсенной ссылки.
+    Возвращает dict или None, если протокол/параметры не поддерживаются.
+    """
+    try:
+        ptype = parsed["type"]
+        outbound = None
+
+        if ptype == "vless":
+            params = parsed["params"]
+            outbound = {
+                "type": "vless",
+                "tag": "proxy",
+                "server": parsed["host"],
+                "server_port": parsed["port"],
+                "uuid": parsed["uuid"],
+                "flow": params.get("flow", ""),
+            }
+            security = params.get("security", "")
+            if security == "tls":
+                outbound["tls"] = {
+                    "enabled": True,
+                    "server_name": params.get("sni") or parsed["host"],
+                    "insecure": params.get("allowInsecure", "0") in ("1", "true"),
+                }
+            elif security == "reality":
+                outbound["tls"] = {
+                    "enabled": True,
+                    "server_name": params.get("sni") or parsed["host"],
+                    "insecure": True,
+                    "utls": {"enabled": True, "fingerprint": params.get("fp", "chrome")},
+                    "reality": {
+                        "enabled": True,
+                        "public_key": params.get("pbk", ""),
+                        "short_id": params.get("sid", ""),
+                    },
+                }
+            ttype = params.get("type", "tcp")
+            if ttype == "ws":
+                outbound["transport"] = {
+                    "type": "ws",
+                    "path": params.get("path", "/"),
+                    "headers": {"Host": params.get("host") or params.get("sni") or parsed["host"]},
+                }
+            elif ttype == "grpc":
+                outbound["transport"] = {
+                    "type": "grpc",
+                    "service_name": params.get("serviceName", ""),
+                }
+            elif ttype == "http" or ttype == "xhttp":
+                outbound["transport"] = {
+                    "type": "http",
+                    "host": [params.get("host") or params.get("sni") or parsed["host"]],
+                    "path": params.get("path", "/"),
+                }
+
+        elif ptype == "vmess":
+            params = parsed["params"]
+            outbound = {
+                "type": "vmess",
+                "tag": "proxy",
+                "server": parsed["host"],
+                "server_port": parsed["port"],
+                "uuid": parsed["uuid"],
+                "security": "auto",
+            }
+            if params.get("tls") == "tls":
+                outbound["tls"] = {
+                    "enabled": True,
+                    "server_name": params.get("sni") or params.get("host") or parsed["host"],
+                    "insecure": True,
+                }
+            ttype = params.get("net", "tcp")
+            if ttype == "ws":
+                outbound["transport"] = {
+                    "type": "ws",
+                    "path": params.get("path", "/"),
+                    "headers": {"Host": params.get("host") or parsed["host"]},
+                }
+
+        elif ptype == "trojan":
+            params = parsed["params"]
+            outbound = {
+                "type": "trojan",
+                "tag": "proxy",
+                "server": parsed["host"],
+                "server_port": parsed["port"],
+                "password": parsed["password"],
+                "tls": {
+                    "enabled": True,
+                    "server_name": params.get("sni") or parsed["host"],
+                    "insecure": params.get("allowInsecure", "0") in ("1", "true"),
+                },
+            }
+            ttype = params.get("type", "tcp")
+            if ttype == "ws":
+                outbound["transport"] = {
+                    "type": "ws",
+                    "path": params.get("path", "/"),
+                    "headers": {"Host": params.get("host") or parsed["host"]},
+                }
+            elif ttype == "grpc":
+                outbound["transport"] = {
+                    "type": "grpc",
+                    "service_name": params.get("serviceName", ""),
+                }
+
+        elif ptype == "shadowsocks":
+            outbound = {
+                "type": "shadowsocks",
+                "tag": "proxy",
+                "server": parsed["host"],
+                "server_port": parsed["port"],
+                "method": parsed["method"],
+                "password": parsed["password"],
+            }
+
+        elif ptype == "hysteria2":
+            params = parsed["params"]
+            outbound = {
+                "type": "hysteria2",
+                "tag": "proxy",
+                "server": parsed["host"],
+                "server_port": parsed["port"],
+                "password": parsed["password"],
+                "tls": {
+                    "enabled": True,
+                    "server_name": params.get("sni") or parsed["host"],
+                    "insecure": params.get("insecure", "0") in ("1", "true"),
+                },
+            }
+            if params.get("obfs"):
+                outbound["obfs"] = {
+                    "type": params.get("obfs"),
+                    "password": params.get("obfs-password", ""),
+                }
+
+        if not outbound:
+            return None
+
+        config = {
+            "log": {"level": "error"},
+            "inbounds": [{
+                "type": "socks",
+                "tag": "socks-in",
+                "listen": "127.0.0.1",
+                "listen_port": socks_port,
+            }],
+            "outbounds": [outbound],
+        }
+        return config
+    except Exception:
+        return None
+
+# ------------------ Запуск sing-box и проверка ------------------
+
+_sing_box_lock = threading.Lock()
+_port_counter = [0]
+
+def _next_socks_port():
+    """Выдаёт следующий свободный порт для SOCKS5. Потокобезопасно."""
+    with _sing_box_lock:
+        _port_counter[0] = (_port_counter[0] + 1) % 5000
+        return SOCKS_PORT_BASE + _port_counter[0]
+
+def _wait_for_port(host, port, timeout):
+    """Ждёт, пока порт откроется. Возвращает True, если дождались."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
                 return True
+        except Exception:
+            time.sleep(0.1)
     return False
 
-def is_russian_exit(key_str: str, host: str, country: str) -> bool:
+def _check_via_socks(socks_port, timeout):
+    """
+    Дёргает HTTP-запрос через SOCKS5-порт sing-box.
+    Возвращает задержку в мс или None, если не сработало.
+    """
+    start = time.time()
+    try:
+        # SOCKS5 handshake вручную: без авторизации
+        sock = socket.create_connection(("127.0.0.1", socks_port), timeout=timeout)
+        sock.settimeout(timeout)
+        # greeting: ver=5, nmethods=1, method=0 (no auth)
+        sock.sendall(b"\x05\x01\x00")
+        resp = sock.recv(2)
+        if len(resp) < 2 or resp[0] != 5 or resp[1] != 0:
+            sock.close()
+            return None
+        # connect: ver=5, cmd=1, rsv=0, atyp=3 (domain), len, domain, port
+        target_host = b"cp.cloudflare.com"
+        req = b"\x05\x01\x00\x03" + bytes([len(target_host)]) + target_host + (80).to_bytes(2, "big")
+        sock.sendall(req)
+        resp = sock.recv(10)
+        if len(resp) < 2 or resp[1] != 0:
+            sock.close()
+            return None
+        # HTTP-запрос
+        http_req = (
+            b"GET /generate_204 HTTP/1.1\r\n"
+            b"Host: cp.cloudflare.com\r\n"
+            b"User-Agent: Mozilla/5.0\r\n"
+            b"Connection: close\r\n\r\n"
+        )
+        sock.sendall(http_req)
+        data = sock.recv(64)
+        sock.close()
+        if not data:
+            return None
+        # Ждём любой ответ — 204, 200, редирект — всё считается успехом
+        latency = int((time.time() - start) * 1000)
+        return latency
+    except Exception:
+        return None
+
+def check_single_key(data):
+    """
+    Полная проверка конфига через sing-box.
+    1. Парсит ссылку.
+    2. Собирает конфиг.
+    3. Запускает sing-box на свободном SOCKS5-порту.
+    4. Ждёт, пока порт откроется.
+    5. Дёргает HTTP-запрос через SOCKS5.
+    6. Убивает sing-box.
+    7. Возвращает задержку или None.
+    """
+    key, tag = data
+
+    parsed = parse_proxy_url(key)
+    if not parsed:
+        return None, None, None, None, key, "parse_error"
+
+    host = parsed.get("host", "")
+    if not host:
+        return None, None, None, None, key, "no_host"
+
+    socks_port = _next_socks_port()
+    config = build_sing_box_config(parsed, socks_port)
+    if not config:
+        return None, None, None, None, key, "config_error"
+
+    # Временный файл для конфига
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    )
+    try:
+        json.dump(config, tmp)
+        tmp.close()
+        config_path = tmp.name
+    except Exception:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+        return None, None, None, None, key, "temp_error"
+
+    proc = None
+    try:
+        # Запускаем sing-box в фоне
+        proc = subprocess.Popen(
+            ["sing-box", "run", "-c", config_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # Ждём, пока SOCKS5-порт откроется
+        if not _wait_for_port("127.0.0.1", socks_port, SING_BOX_START_TIMEOUT):
+            return None, None, None, None, key, "singbox_start_fail"
+
+        # Проверяем реальный трафик
+        latency = _check_via_socks(socks_port, SING_BOX_CHECK_TIMEOUT)
+        if latency is None:
+            return None, None, None, None, key, "traffic_fail"
+
+        # Определяем страну
+        country = detect_exit_country_via_http(host)
+        if country == "UNKNOWN":
+            country = get_country_fast(host, key)
+            if country == "UNKNOWN":
+                _inc_geo_stat("unknown")
+            else:
+                _inc_geo_stat("fast")
+
+        return latency, tag, country, host, key, None
+
+    except Exception as e:
+        return None, None, None, None, key, "check_error:" + str(e)[:30]
+    finally:
+        # Убиваем процесс и удаляем конфиг
+        if proc is not None:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    proc.kill()
+            except Exception:
+                pass
+        try:
+            os.unlink(config_path)
+        except Exception:
+            pass
+
+# ------------------ Определение российских exit-нод ------------------
+
+RU_MARKERS_STRICT = [
+    ".ru", "moscow", "msk", "spb", "saint-peter", "russia",
+    "россия", "москва", "питер", "ru-", "-ru.",
+    "178.154.", "77.88.", "5.255.", "87.250.",
+    "95.108.", "213.180.", "195.208.",
+    "91.108.", "149.154.",
+]
+
+def _is_russian_exit(key_str, host, country):
+    """Определяет, ведёт ли сервер в РФ (для отсева EURO→RU)."""
     if country == "RU":
         return True
     host_lower = host.lower()
@@ -375,26 +803,14 @@ def is_russian_exit(key_str: str, host: str, country: str) -> bool:
     for marker in RU_MARKERS_STRICT:
         if marker.lower() in host_lower:
             return True
-    extra = [".ru", "moscow", "msk", "spb", "yandex", "vk.", "mail.ru", "sber", "россия", "москва", "selectel", "timeweb", "reg.ru"]
+    extra = [".ru", "moscow", "msk", "spb", "yandex", "vk.", "mail.ru",
+             "sber", "россия", "москва", "selectel", "timeweb", "reg.ru"]
     if any(h in host_lower or h in key_lower for h in extra):
         return True
     return False
 
-def is_garbage_text(key_str: str) -> bool:
-    upper = key_str.upper()
-    for m in BAD_MARKERS:
-        if m in upper:
-            return True
-    if ".ir" in key_str or ".cn" in key_str or "127.0.0.1" in key_str:
-        return True
-    return False
 
-def is_hysteria2_russian(key_str: str) -> bool:
-    lower = key_str.lower()
-    if "hysteria2" in lower or "hy2" in lower:
-        if "msk.frkn.org" in lower or "frkn" in lower:
-            return True
-    return False
+# ------------------ Сбор ключей ------------------
 
 def fetch_keys(urls, tag):
     out = []
@@ -416,180 +832,35 @@ def fetch_keys(urls, tag):
                 lines = content.splitlines()
             for l in lines:
                 l = l.strip()
-                if len(l) > 2000:
+                if len(l) > 3000:
                     continue
                 if l.startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria2://")):
-                    if is_hysteria2_russian(l):
-                        continue
                     out.append((l, tag))
         except Exception:
             pass
     return out
-
-ERR_TIMEOUT = "timeout"
-ERR_TLS = "tls"
-ERR_DNS = "dns"
-ERR_OTHER = "other"
-
-_err_stats = defaultdict(int)
-_err_stats_lock = threading.Lock()
-
-def _inc_err(kind: str):
-    with _err_stats_lock:
-        _err_stats[kind] += 1
-
-def _extract_host_port(key: str):
-    try:
-        if "@" not in key or ":" not in key:
-            return None, None
-        part = key.split("@")[1].split("?")[0].split("#")[0]
-        host_port = part.split(":")
-        if len(host_port) < 2:
-            return None, None
-        return host_port[0], int(host_port[1])
-    except Exception:
-        return None, None
-
-def _extract_sni(key: str, host: str) -> str:
-    """Достаёт SNI из ключа. Если нет — возвращает host."""
-    try:
-        sni_match = re.search(r"sni=([^&]+)", key)
-        if sni_match:
-            return unquote(sni_match.group(1))
-    except Exception:
-        pass
-    return host
-
-def _http_probe(host: str, port: int, is_tls: bool, sni: str = None) -> bool:
-    if sni is None:
-        sni = host
-    try:
-        if is_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            raw = socket.create_connection((host, port), timeout=HTTP_CHECK_TIMEOUT)
-            sock = context.wrap_socket(raw, server_hostname=sni)
-        else:
-            sock = socket.create_connection((host, port), timeout=HTTP_CHECK_TIMEOUT)
-        with sock:
-            req = (
-                f"GET /generate_204 HTTP/1.1\r\n"
-                f"Host: cp.cloudflare.com\r\n"
-                f"User-Agent: Mozilla/5.0\r\n"
-                f"Connection: close\r\n\r\n"
-            )
-            sock.sendall(req.encode())
-            sock.settimeout(HTTP_CHECK_TIMEOUT)
-            try:
-                data = sock.recv(128)
-                return bool(data)
-            except socket.timeout:
-                return False
-    except Exception:
-        return False
-
-def check_single_key(data):
-    key, tag = data
-    host, port = _extract_host_port(key)
-    if not host or not port:
-        return None, None, None, None, key, ERR_OTHER
-
-    sni = _extract_sni(key, host)
-
-    if tag == "MY":
-        fast_hint = get_country_fast(host, key)
-        if fast_hint == "RU" and _has_many_ru_markers(host, key):
-            return None, None, None, None, key, ERR_OTHER
-
-    is_tls = (
-        "security=tls" in key or
-        "security=reality" in key or
-        "trojan://" in key or
-        "vmess://" in key
-    )
-    is_ws = "type=ws" in key or "net=ws" in key
-    path = "/"
-    match = re.search(r"path=([^&]+)", key)
-    if match:
-        path = unquote(match.group(1))
-
-    start = time.time()
-
-    try:
-        if is_ws:
-            protocol = "wss" if is_tls else "ws"
-            ws_url = f"{protocol}://{host}:{port}{path}"
-            ws = websocket.create_connection(
-                ws_url,
-                timeout=TIMEOUT,
-                sslopt={"cert_reqs": ssl.CERT_NONE},
-            )
-            ws.close()
-        elif is_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            with socket.create_connection((host, port), timeout=TIMEOUT) as sock:
-                with context.wrap_socket(sock, server_hostname=sni):
-                    pass
-        else:
-            with socket.create_connection((host, port), timeout=TIMEOUT):
-                pass
-    except socket.timeout:
-        _inc_err(ERR_TIMEOUT)
-        return None, None, None, None, key, ERR_TIMEOUT
-    except ssl.SSLError:
-        _inc_err(ERR_TLS)
-        return None, None, None, None, key, ERR_TLS
-    except socket.gaierror:
-        _inc_err(ERR_DNS)
-        return None, None, None, None, key, ERR_DNS
-    except OSError as e:
-        msg = str(e).lower()
-        if "timed out" in msg or "timeout" in msg:
-            _inc_err(ERR_TIMEOUT)
-            return None, None, None, None, key, ERR_TIMEOUT
-        _inc_err(ERR_OTHER)
-        return None, None, None, None, key, ERR_OTHER
-    except Exception:
-        _inc_err(ERR_OTHER)
-        return None, None, None, None, key, ERR_OTHER
-
-    if CHECK_HTTP and not is_ws:
-        if not _http_probe(host, port, is_tls, sni):
-            _inc_err("http_fail")
-            return None, None, None, None, key, "http_fail"
-
-    latency = int((time.time() - start) * 1000)
-    country_exit = detect_exit_country_via_http(host)
-    if country_exit == "UNKNOWN":
-        country_exit = get_country_fast(host, key)
-        if country_exit == "UNKNOWN":
-            _inc_geo_stat("unknown")
-        else:
-            _inc_geo_stat("fast")
-    return latency, tag, country_exit, host, key, None
 
 def make_final_key(k_id, latency, country):
     title_ru = country_to_title_ru(country)
     flag = country_to_flag(country)
     title_full = f"{title_ru} {country}" if country and country != "UNKNOWN" else title_ru
     info_str = f"[{latency}ms {title_full} {flag} {MY_CHANNEL}]"
-    raw = f"{k_id}#{info_str}"
-    return fix_universal(raw)
+    return f"{k_id}#{info_str}"
 
 def extract_ping(key_str):
     try:
         label = key_str.split("#")[-1]
-        match = re.search(r"(\d+)ms", label)
-        if match:
-            return int(match.group(1))
+        m = re.search(r"(\d+)ms", label)
+        if m:
+            return int(m.group(1))
         return None
     except Exception:
         return None
 
+# ------------------ Дедупликация и умный отбор ------------------
+
 def dedupe_by_hostport(keys):
+    """Оставляет один конфиг на каждый host:port с наименьшим пингом."""
     by_hostport = {}
     backup = []
     for k in keys:
@@ -613,14 +884,9 @@ def dedupe_by_hostport(keys):
 def smart_select(all_items, history, max_count):
     """
     Умный отбор ключей:
-    1. Сначала живые из истории (были живы недавно)
-    2. Потом все остальные в случайном порядке
+    1. Сначала живые из истории (недавно работали).
+    2. Потом остальные в случайном порядке.
     """
-    if not SMART_SELECT:
-        random.seed(42)
-        random.shuffle(all_items)
-        return all_items[:max_count]
-
     alive_from_history = []
     others = []
 
@@ -643,10 +909,12 @@ def smart_select(all_items, history, max_count):
     combined = alive_from_history + others
     return combined[:max_count]
 
+# ------------------ Сохранение результатов ------------------
+
 def save_exact(keys, folder, filename):
     path = os.path.join(folder, filename)
     with open(path, "w", encoding="utf-8") as f:
-        cleaned = [fix_universal(k.strip()) for k in keys if k and k.strip()]
+        cleaned = [k.strip() for k in keys if k and k.strip()]
         f.write("\n".join(cleaned))
     return path
 
@@ -802,9 +1070,11 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
             print(f"  {line}")
     return subs_path
 
+# ------------------ Точка входа ------------------
+
 if __name__ == "__main__":
-    print("=== CHECKER v7 (SMART SELECT + SNI + HTTP PROBE) ===")
-    print(f"Параметры: CACHE={CACHE_HOURS}h, MAX_PING={MAX_PING_MS}ms, FAST={FAST_LIMIT}, HISTORY={MAX_HISTORY_AGE // 3600}h, MAX_KEYS={MAX_KEYS_TO_CHECK}")
+    print("=== CHECKER v8 (SING-BOX FULL CHECK) ===")
+    print(f"Параметры: CACHE={CACHE_HOURS}h, MAX_PING={MAX_PING_MS}ms, FAST={FAST_LIMIT}, HISTORY={MAX_HISTORY_AGE // 3600}h, MAX_KEYS={MAX_KEYS_TO_CHECK}, THREADS={THREADS}")
 
     load_ip_cache()
     print(f"📂 Дисковый ip_cache загружен: {len(_disk_ip_cache)} записей")
@@ -813,7 +1083,6 @@ if __name__ == "__main__":
     print(f"📂 История загружена: {len(history)} записей")
 
     tasks = fetch_keys(URLS_RU, "RU") + fetch_keys(URLS_MY, "MY")
-
     ru_count = sum(1 for _, tag in tasks if tag == "RU")
     my_count = sum(1 for _, tag in tasks if tag == "MY")
     print(f"📥 Загружено RU: {ru_count}, MY: {my_count}")
@@ -844,7 +1113,7 @@ if __name__ == "__main__":
             if tag == "RU":
                 res_ru.append(final)
             elif tag == "MY":
-                if is_russian_exit(k, host, country):
+                if _is_russian_exit(k, host, country):
                     euro_filtered_ru += 1
                 else:
                     res_euro.append(final)
@@ -856,6 +1125,7 @@ if __name__ == "__main__":
 
     if to_check:
         checked_ok = 0
+        checked_fail = 0
         with ThreadPoolExecutor(max_workers=THREADS) as executor:
             future_map = {executor.submit(check_single_key, item): item for item in to_check}
             for future in as_completed(future_map):
@@ -863,12 +1133,14 @@ if __name__ == "__main__":
                 try:
                     latency, _, country, host, original_key, err_type = future.result()
                 except Exception:
+                    checked_fail += 1
                     if tag == "RU":
                         dead_ru.append(key)
                     else:
                         dead_euro.append(key)
                     continue
                 if latency is None:
+                    checked_fail += 1
                     if tag == "RU":
                         dead_ru.append(original_key)
                     elif tag == "MY":
@@ -886,13 +1158,16 @@ if __name__ == "__main__":
                 if tag == "RU":
                     res_ru.append(final)
                 elif tag == "MY":
-                    if is_russian_exit(original_key, host, country):
+                    if _is_russian_exit(original_key, host, country):
                         euro_filtered_ru += 1
                         dead_euro.append(original_key)
                     else:
                         res_euro.append(final)
                 checked_ok += 1
-        print(f"✅ Проверено успешно: {checked_ok}")
+                # Прогресс каждые 500 проверок
+                if (checked_ok + checked_fail) % 500 == 0:
+                    print(f"  ... проверено {checked_ok + checked_fail} / {len(to_check)} (живых: {checked_ok})")
+        print(f"✅ Проверено успешно: {checked_ok}, провалено: {checked_fail}")
 
     save_ip_cache()
     print(f"💾 ip_cache сохранён: {len(_disk_ip_cache)} записей")
@@ -986,14 +1261,5 @@ if __name__ == "__main__":
         print(f"  {src:8s}: {n:5d}  ({n * 100 // total_geo}%)")
     if _ip_api_disabled:
         print("  ⚠️  ip-api был отключён из-за 429 в процессе работы")
-
-    print(f"\n❌ Ошибки соединения:")
-    with _err_stats_lock:
-        estats = dict(_err_stats)
-    total_err = sum(estats.values()) or 1
-    for kind in (ERR_TIMEOUT, ERR_TLS, ERR_DNS, ERR_OTHER, "http_fail"):
-        n = estats.get(kind, 0)
-        if n:
-            print(f"  {kind:12s}: {n:5d}  ({n * 100 // total_err}%)")
 
     print("\n✅ SUCCESS: FAST/ALL + WHITE/BLACK GENERATED")
