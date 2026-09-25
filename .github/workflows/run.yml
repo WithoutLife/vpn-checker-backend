@@ -34,7 +34,9 @@ jobs:
         pip install requests websocket-client
 
     - name: Install Xray
-      uses: Xray-setup/setup-xray@v1
+      run: |
+        bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+        xray version
 
     - name: Run checker script
       run: python checker.py
