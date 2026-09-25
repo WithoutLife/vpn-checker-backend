@@ -33,10 +33,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install requests websocket-client
 
-    - name: Install Xray
+    - name: Install sing-box
       run: |
-        sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-        xray version
+        sudo bash -c "$(curl -fsSL https://sing-box.app/install.sh)"
+        sing-box version
 
     - name: Run checker script
       run: python checker.py
