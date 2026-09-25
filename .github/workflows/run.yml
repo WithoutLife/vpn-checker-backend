@@ -15,7 +15,7 @@ permissions:
 jobs:
   run-checker:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 120
 
     steps:
     - name: Checkout repository
@@ -33,9 +33,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install requests websocket-client
 
+    - name: Install Xray
+      uses: Xray-setup/setup-xray@v1
+
     - name: Run checker script
       run: python checker.py
-      continue-on-error: false   # чтобы сразу падал, если что-то не так
+      continue-on-error: false
 
     - name: Commit and Push changes
       run: |
