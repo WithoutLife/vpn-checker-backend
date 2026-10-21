@@ -1,29 +1,29 @@
-# Generated: 2026-10-21T01:05:24.417191+00:00 UTC
+# Generated: 2026-10-21T06:50:31.414665+00:00 UTC
 
 === 🇷🇺 RUSSIA (FAST) ===
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/RU_Best/ru_white_part1.txt?ts=1792544724
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/RU_Best/ru_white_part1.txt?ts=1792565431
 
 === 🇷🇺 RUSSIA (ALL) ===
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/RU_Best/ru_white_all_part1.txt?ts=1792544724
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/RU_Best/ru_white_all_part2.txt?ts=1792544724
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/RU_Best/ru_white_all_part1.txt?ts=1792565431
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/RU_Best/ru_white_all_part2.txt?ts=1792565431
 
 === 🇪🇺 EUROPE (FAST) ===
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_part1.txt?ts=1792544724
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_part1.txt?ts=1792565431
 
 === 🇪🇺 EUROPE (ALL) ===
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_part1.txt?ts=1792544724
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_part2.txt?ts=1792544724
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_part3.txt?ts=1792544724
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_part4.txt?ts=1792544724
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_part1.txt?ts=1792565431
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_part2.txt?ts=1792565431
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_part3.txt?ts=1792565431
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_part4.txt?ts=1792565431
 
 === ✅ WHITE RUSSIA (ALL) ===
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/RU_Best/ru_white_all_WHITE.txt?ts=1792544724
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/RU_Best/ru_white_all_WHITE.txt?ts=1792565431
 
 === ✅ WHITE EUROPE (ALL) ===
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_WHITE.txt?ts=1792544724
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_WHITE.txt?ts=1792565431
 
 === ⚠️ BLACK RUSSIA (ALL) ===
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/RU_Best/ru_white_all_BLACK.txt?ts=1792544724
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/RU_Best/ru_white_all_BLACK.txt?ts=1792565431
 
 === ⚠️ BLACK EUROPE (ALL) ===
-https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_BLACK.txt?ts=1792544724
+https://raw.githubusercontent.com/WithoutLife/vpn-checker-backend/main/checked/My_Euro/my_euro_all_BLACK.txt?ts=1792565431
