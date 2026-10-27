@@ -13,12 +13,13 @@ import threading
 import urllib.parse
 import subprocess
 import tempfile
+import ipaddress
 from datetime import datetime, timezone
 from urllib.parse import unquote, urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 
-# ------------------ 设置 ------------------
+# ------------------ Настройки ------------------
 BASE_DIR = "checked"
 FOLDER_RU = os.path.join(BASE_DIR, "RU_Best")
 FOLDER_EURO = os.path.join(BASE_DIR, "My_Euro")
@@ -168,7 +169,7 @@ URLS_MY = [
     "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/refs/heads/main/data/githubmirror/new/cf_fresh.txt"
 ]
 
-# ------------------ 链接解析工具 ------------------
+# ------------------ Ссылки-парсеры ------------------
 
 def _safe_int(v, default=0):
     try:
@@ -659,16 +660,13 @@ def _check_via_socks(socks_port, timeout):
     """
     start = time.time()
     try:
-        # SOCKS5 handshake вручную: без авторизации
         sock = socket.create_connection(("127.0.0.1", socks_port), timeout=timeout)
         sock.settimeout(timeout)
-        # greeting: ver=5, nmethods=1, method=0 (no auth)
         sock.sendall(b"\x05\x01\x00")
         resp = sock.recv(2)
         if len(resp) < 2 or resp[0] != 5 or resp[1] != 0:
             sock.close()
             return None
-        # connect: ver=5, cmd=1, rsv=0, atyp=3 (domain), len, domain, port
         target_host = b"cp.cloudflare.com"
         req = b"\x05\x01\x00\x03" + bytes([len(target_host)]) + target_host + (80).to_bytes(2, "big")
         sock.sendall(req)
@@ -676,7 +674,6 @@ def _check_via_socks(socks_port, timeout):
         if len(resp) < 2 or resp[1] != 0:
             sock.close()
             return None
-        # HTTP-запрос
         http_req = (
             b"GET /generate_204 HTTP/1.1\r\n"
             b"Host: cp.cloudflare.com\r\n"
@@ -688,7 +685,6 @@ def _check_via_socks(socks_port, timeout):
         sock.close()
         if not data:
             return None
-        # Ждём любой ответ — 204, 200, редирект — всё считается успехом
         latency = int((time.time() - start) * 1000)
         return latency
     except Exception:
@@ -697,13 +693,6 @@ def _check_via_socks(socks_port, timeout):
 def check_single_key(data):
     """
     Полная проверка конфига через sing-box.
-    1. Парсит ссылку.
-    2. Собирает конфиг.
-    3. Запускает sing-box на свободном SOCKS5-порту.
-    4. Ждёт, пока порт откроется.
-    5. Дёргает HTTP-запрос через SOCKS5.
-    6. Убивает sing-box.
-    7. Возвращает задержку или None.
     """
     key, tag = data
 
@@ -720,7 +709,6 @@ def check_single_key(data):
     if not config:
         return None, None, None, None, key, "config_error"
 
-    # Временный файл для конфига
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", delete=False, encoding="utf-8"
     )
@@ -737,23 +725,19 @@ def check_single_key(data):
 
     proc = None
     try:
-        # Запускаем sing-box в фоне
         proc = subprocess.Popen(
             ["sing-box", "run", "-c", config_path],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
 
-        # Ждём, пока SOCKS5-порт откроется
         if not _wait_for_port("127.0.0.1", socks_port, SING_BOX_START_TIMEOUT):
             return None, None, None, None, key, "singbox_start_fail"
 
-        # Проверяем реальный трафик
         latency = _check_via_socks(socks_port, SING_BOX_CHECK_TIMEOUT)
         if latency is None:
             return None, None, None, None, key, "traffic_fail"
 
-        # Определяем страну
         country = detect_exit_country_via_http(host)
         if country == "UNKNOWN":
             country = get_country_fast(host, key)
@@ -767,7 +751,6 @@ def check_single_key(data):
     except Exception as e:
         return None, None, None, None, key, "check_error:" + str(e)[:30]
     finally:
-        # Убиваем процесс и удаляем конфиг
         if proc is not None:
             try:
                 proc.terminate()
@@ -808,7 +791,6 @@ def _is_russian_exit(key_str, host, country):
     if any(h in host_lower or h in key_lower for h in extra):
         return True
     return False
-
 
 # ------------------ Сбор ключей ------------------
 
@@ -979,6 +961,43 @@ def save_json(path, data):
     except Exception:
         pass
 
+# ------------------ МОДИФИКАЦИЯ HOST -> IP ------------------
+
+def modify_to_ip(keys_list):
+    """Заменяет host на IP в конфигах, если резолв удался."""
+    modified = []
+    for k in keys_list:
+        k_id = k.split("#")[0]
+        parsed = parse_proxy_url(k_id)
+        if not parsed or not parsed.get("host"):
+            continue
+        
+        host = parsed["host"]
+        try:
+            ipaddress.ip_address(host)
+            modified.append(k)
+            continue
+        except ValueError:
+            pass
+        
+        ip = resolve_host(host)
+        if not ip:
+            continue
+        
+        try:
+            if "@" in k_id:
+                before_at, after_at = k_id.split("@", 1)
+                if ":" in after_at:
+                    _, rest = after_at.split(":", 1)
+                    new_key = f"{before_at}@{ip}:{rest}"
+                    tag_part = "#" + k.split("#", 1)[1] if "#" in k else ""
+                    modified.append(new_key + tag_part)
+        except Exception:
+            pass
+    return modified
+
+# ------------------ Генерация списка подписок ------------------
+
 def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, euro_all_files):
     GITHUB_USER_REPO = "WithoutLife/vpn-checker-backend"
     BRANCH = "main"
@@ -1058,6 +1077,13 @@ def generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, eu
         subs_lines.append("=== ⚠️ BLACK EUROPE (ALL) ===")
         mtime = int(os.path.getmtime(euro_black_path))
         subs_lines.append(f"{BASE_RAW}/checked/My_Euro/my_euro_all_BLACK.txt?ts={mtime}")
+        subs_lines.append("")
+
+    ru_ip_path = os.path.join(FOLDER_RU, "ru_white_part1_ip.txt")
+    if os.path.exists(ru_ip_path) and os.path.getsize(ru_ip_path) > 0:
+        subs_lines.append("=== 🇷🇺 RUSSIA (FAST IP) ===")
+        mtime = int(os.path.getmtime(ru_ip_path))
+        subs_lines.append(f"{BASE_RAW}/checked/RU_Best/ru_white_part1_ip.txt?ts={mtime}")
 
     subs_path = os.path.join(BASE_DIR, "subscriptions_list.txt")
     with open(subs_path, "w", encoding="utf-8") as f:
@@ -1164,7 +1190,6 @@ if __name__ == "__main__":
                     else:
                         res_euro.append(final)
                 checked_ok += 1
-                # Прогресс каждые 500 проверок
                 if (checked_ok + checked_fail) % 500 == 0:
                     print(f"  ... проверено {checked_ok + checked_fail} / {len(to_check)} (живых: {checked_ok})")
         print(f"✅ Проверено успешно: {checked_ok}, провалено: {checked_fail}")
@@ -1222,6 +1247,16 @@ if __name__ == "__main__":
     print(f"\n💾 WHITE/BLACK → {FOLDER_EURO}:")
     save_exact(res_euro_clean, FOLDER_EURO, "my_euro_all_WHITE.txt")
     save_exact(dead_euro, FOLDER_EURO, "my_euro_all_BLACK.txt")
+
+    # --- Модифицированные конфиги (host -> IP) ---
+    print(f"\n🔧 Создание IP-модифицированных конфигов:")
+    ru_fast_ip = modify_to_ip(res_ru_fast)
+    if ru_fast_ip:
+        save_exact(ru_fast_ip, FOLDER_RU, "ru_white_part1_ip.txt")
+        print(f"  ru_white_part1_ip.txt: {len(ru_fast_ip)} ключей")
+    else:
+        save_exact([], FOLDER_RU, "ru_white_part1_ip.txt")
+        print(f"  ru_white_part1_ip.txt: 0 ключей (не удалось резолвить)")
 
     try:
         generate_subscriptions_list(ru_fast_files, ru_all_files, euro_fast_files, euro_all_files)
